@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "description": "3KLES AMQP Message broker",
   "keywords": [],
+  "main": "dist/index.js",
+  "typings": "dist/index.d.ts",
   "author": "Charles Da Silva Costa",
   "license": "ISC",
   "scripts": {

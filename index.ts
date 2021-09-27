@@ -1,1 +1,1 @@
-export * from './src/index.mongodb';
+export * from './src/index';
