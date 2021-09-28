@@ -30,7 +30,7 @@ export class MessageBroker {
     public async sendToExchange(exchange: string, routingKey: string, msg: Buffer,
         type: string = 'direct', options?: Options.AssertExchange): Promise<boolean> {
 
-        this.channel.assertExchange(exchange, type, options);
+        await this.channel.assertExchange(exchange, type, options);
         return this.channel.publish(exchange, routingKey, msg);
     }
 
@@ -84,7 +84,7 @@ export class MessageBroker {
                 this.queues[key].forEach((h) => h(msg, ack));
             }
         );
-        return () => this.unsubscribe(queue, handler);
+        return () => this.unsubscribe(key, handler);
     }
 
     public async subscribe(queue: string,
