@@ -122,6 +122,11 @@ export class MessageBroker {
         _.pull(this.queues[key], handler);
     }
 
+    public async disconnect(): Promise<void> {
+        await this.channel.close();
+        await this.connection.close();
+    }
+
     private async init(): Promise<MessageBroker> {
         const config: Options.Connect = {
             hostname: process.env.RABBITMQ_URL || 'localhost',

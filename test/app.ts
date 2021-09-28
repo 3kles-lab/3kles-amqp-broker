@@ -31,4 +31,6 @@ import { MessageBroker } from '../src/message-broker';
     /*Send RPC message and wait response*/
     const response = await broker.sendRPCMessage('m3api', Buffer.from(JSON.stringify({ program: 'MNS150MI', transaction: 'GetUserData' })));
 
+    await broker.disconnect();
+
 })();
