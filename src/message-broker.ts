@@ -35,7 +35,7 @@ export class MessageBroker {
     }
 
     public async send(queue: string, msg: Buffer, options?: Options.Publish): Promise<boolean> {
-        await this.channel.assertQueue(queue, { durable: false });
+        await this.channel.assertQueue(queue, { durable: true });
         return this.channel.sendToQueue(queue, msg, options);
     }
 
