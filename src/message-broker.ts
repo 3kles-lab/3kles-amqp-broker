@@ -146,6 +146,10 @@ export class MessageBroker {
 
         this.listenRPC();
 
+        if (process.env.PREFETCH) {
+            await this.channel.prefetch(+process.env.PREFETCH);
+        }
+
         return this;
     }
 
