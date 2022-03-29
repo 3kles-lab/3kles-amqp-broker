@@ -15,7 +15,7 @@ export class MessageBroker {
 
     private static instance: Promise<MessageBroker>;
     private connection: Connection;
-    private channel: Channel;
+    public channel: Channel;
 
     private queues: { [key: string]: [((msg: ConsumeMessage, ack: () => void) => Promise<void>)] } = {};
 
@@ -53,6 +53,28 @@ export class MessageBroker {
                 replyTo: this.rpcQueue.queue,
             });
         });
+    }
+
+    public async receiveRPCMessage(queue: string, handler: ((msg: ConsumeMessage, ack: (response: string) => void) => Promise<void>)): Promise<void> {
+        await this.channel.assertQueue(queue, { durable: false });
+
+        this.channel.consume(
+            queue,
+            async (msg) => {
+                const ack = _.once((response: string) => {
+
+                    this.channel.sendToQueue(msg.properties.replyTo,
+                        Buffer.from(response),
+                        {
+                            correlationId: msg.properties.correlationId
+                        }
+                    );
+                    this.channel.ack(msg);
+                });
+
+                await handler(msg, ack);
+            }
+        );
     }
 
     public async subscribeExchange(queue: string, exchange: string, routingKey: string, type: string = 'direct',
@@ -140,15 +162,15 @@ export class MessageBroker {
         this.connection = await connect(config);
         this.channel = await this.connection.createChannel();
 
+        if (process.env.PREFETCH) {
+            await this.channel.prefetch(+process.env.PREFETCH);
+        }
+
         this.rpcQueue = await this.channel.assertQueue('', {
             exclusive: false
         });
 
         this.listenRPC();
-
-        if (process.env.PREFETCH) {
-            await this.channel.prefetch(+process.env.PREFETCH);
-        }
 
         return this;
     }
