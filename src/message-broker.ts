@@ -162,7 +162,9 @@ export class MessageBroker {
         this.connection = await connect(config);
         this.channel = await this.connection.createChannel();
 
-        if (process.env.PREFETCH) {
+        if (process.env.RABBITMQ_PREFETCH) {
+            await this.channel.prefetch(+process.env.RABBITMQ_PREFETCH);
+        } else if (process.env.PREFETCH) {
             await this.channel.prefetch(+process.env.PREFETCH);
         }
 
