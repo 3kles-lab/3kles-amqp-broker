@@ -3,6 +3,23 @@ import _ from 'lodash';
 import { EventEmitter } from 'events';
 import * as uuid from 'uuid';
 
+type Override<T1, T2> = Omit<T1, keyof T2> & T2;
+
+type QueueConfig = {
+    queue: string;
+    options?: Options.AssertQueue;
+    active: boolean;
+    handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>)[];
+};
+
+type ExchangeConfig = Override<QueueConfig, {
+    type: string;
+    exchange: string;
+    routingKey: string;
+    options?: Options.AssertExchange;
+}>;
+
+
 export class MessageBroker {
 
     public static async getInstance(): Promise<MessageBroker> {
@@ -21,15 +38,16 @@ export class MessageBroker {
     private connection: Connection;
     public channel: Channel;
 
-    private timeout = Number(process.env.RABBITMQ_TIMEOUT) || 5000;
+    private timeout: number = Number(process.env.RABBITMQ_TIMEOUT) || 5000;
 
-    private queues: { [key: string]: [((msg: ConsumeMessage, ack: () => void) => Promise<void>)] } = {};
+    private exchanges: Map<string, ExchangeConfig> = new Map<string, ExchangeConfig>();
+    private queues: Map<string, QueueConfig> = new Map<string, QueueConfig>();
 
     private rpcQueue: Replies.AssertQueue;
     private correlationIds: any[] = [];
     private responseEmitter: EventEmitter = new EventEmitter();
 
-    private isDisconnected = false;
+    private isDisconnected: boolean = false;
 
     private constructor() {
         this.responseEmitter.setMaxListeners(0);
@@ -91,28 +109,35 @@ export class MessageBroker {
 
         const key = JSON.stringify({ exchange, routingKey, queue });
 
-        if (this.queues[key]) {
-            const existingHandler = _.find(this.queues[key], (h) => h === handler);
+        if (this.exchanges.has(key) && this.exchanges.get(key).active) {
+            const existingHandler = _.find(this.exchanges.get(key).handler, (h) => h === handler);
             if (existingHandler) {
                 /* Si on a déjà souscrit à la queue*/
                 return () => this.unsubscribe(key, existingHandler);
             }
-            this.queues[key].push(handler);
+            this.exchanges.get(key).handler.push(handler);
             return () => this.unsubscribe(key, handler);
         }
-
 
         await this.channel.assertExchange(exchange, type, options);
         const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue });
         await this.channel.bindQueue(queue, exchange, routingKey);
 
-        this.queues[key] = [handler];
+        this.exchanges.set(key, {
+            exchange,
+            queue,
+            routingKey,
+            type,
+            options,
+            active: true,
+            handler: [handler]
+        });
 
         this.channel.consume(
             q.queue,
             async (msg) => {
                 const ack = _.once(() => this.channel.ack(msg));
-                this.queues[key].forEach((h) => h(msg, ack));
+                this.exchanges.get(key).handler.forEach((h) => h(msg, ack));
             }
         );
         return () => this.unsubscribe(key, handler);
@@ -124,33 +149,42 @@ export class MessageBroker {
 
         const key = JSON.stringify({ exchange: '', routingKey: '', queue });
 
-        if (this.queues[key]) {
+        if (this.queues.has(key) && this.queues.get(key).active) {
             /*Si la queue existe déjà*/
-            const existingHandler = _.find(this.queues[key], (h) => h === handler);
+            const existingHandler = _.find(this.queues.get(key).handler, (h) => h === handler);
             if (existingHandler) {
                 /* Si on a déjà souscrit à la queue*/
                 return () => this.unsubscribe(key, existingHandler);
             }
-            this.queues[key].push(handler);
+            this.queues.get(key).handler.push(handler);
             return () => this.unsubscribe(key, handler);
         }
 
         await this.channel.assertQueue(queue, options);
 
-        this.queues[key] = [handler];
+        this.queues.set(key, {
+            handler: [handler],
+            queue,
+            active: true,
+            options
+        });
 
         this.channel.consume(
             queue,
             async (msg) => {
                 const ack = _.once(() => this.channel.ack(msg));
-                this.queues[key].map(async (h) => await h(msg, ack));
+                this.queues.get(key).handler.map(async (h) => await h(msg, ack));
             }
         );
         return () => this.unsubscribe(key, handler);
     }
 
     public unsubscribe(key: string, handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>)): void {
-        _.pull(this.queues[key], handler);
+        if (this.queues.has(key)) {
+            _.pull(this.queues.get(key).handler, handler);
+        } else if (this.exchanges.has(key)) {
+            _.pull(this.exchanges.get(key).handler, handler);
+        }
     }
 
     public async disconnect(): Promise<void> {
@@ -201,7 +235,7 @@ export class MessageBroker {
                 console.error('[AMQP] Connection has been closed');
                 console.error('[AMQP] Restarting connection to RabbitMQ');
                 this.connection = null;
-                await this.init();
+                await this.restart();
             }
 
         });
@@ -222,30 +256,41 @@ export class MessageBroker {
 
         this.listenRPC();
         await this.restartQueues();
+        await this.restartExchanges();
 
         return this;
     }
 
-    private delay(milliseconds: number) {
+    private async restart(): Promise<void> {
+        Array.from(this.exchanges.entries()).forEach(([key, value]) => {
+            this.exchanges.set(key, { ...value, active: false });
+        });
+        Array.from(this.queues.entries()).forEach(([key, value]) => {
+            this.queues.set(key, { ...value, active: false });
+        });
+        await this.init();
+    }
+
+    private delay(milliseconds: number): Promise<void> {
         return new Promise(resolve => {
             setTimeout(resolve, milliseconds);
         });
     }
 
-    private async restartQueues() {
-        /*TODO reconnecter les queues*/
-        // console.log('queueLst', Object.keys(this.queues))
+    private async restartQueues(): Promise<void> {
+        await Promise.all(Array.from(this.queues.values()).flatMap((q) => {
+            return q.handler.map((h) => {
+                return this.subscribe(q.queue, h, q.options);
+            });
+        }));
+    }
 
-        // await Promise.all(Object.keys(this.queues).map(async (key) => {
-        //     const { exchange, routingKey, queue } = JSON.parse(key);
-
-        //     console.log('queue', queue);
-        //     await this.subscribe(queue, async (msg, ack) => {
-        //         console.log('Message from queue:', msg.content.toString());
-        //         ack();
-        //     })
-
-        // }));
+    private async restartExchanges(): Promise<void> {
+        await Promise.all(Array.from(this.exchanges.values()).flatMap((q) => {
+            return q.handler.map((h) => {
+                return this.subscribeExchange(q.queue, q.exchange, q.routingKey, q.type, h, q.options);
+            });
+        }));
     }
 
     private listenRPC(): void {
