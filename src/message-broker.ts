@@ -17,6 +17,8 @@ export class MessageBroker {
     private connection: Connection;
     public channel: Channel;
 
+    private timeout = Number(process.env.RABBITMQ_TIMEOUT) || 5000;
+
     private queues: { [key: string]: [((msg: ConsumeMessage, ack: () => void) => Promise<void>)] } = {};
 
     private rpcQueue: Replies.AssertQueue;
@@ -81,7 +83,7 @@ export class MessageBroker {
         handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>),
         options?: Options.AssertExchange): Promise<any> {
 
-        const key = JSON.stringify({ exchange, routingKey });
+        const key = JSON.stringify({ exchange, routingKey, queue });
 
         if (this.queues[key]) {
             const existingHandler = _.find(this.queues[key], (h) => h === handler);
@@ -95,7 +97,7 @@ export class MessageBroker {
 
 
         await this.channel.assertExchange(exchange, type, options);
-        const q = await this.channel.assertQueue(queue, { durable: true });
+        const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue });
         await this.channel.bindQueue(queue, exchange, routingKey);
 
         this.queues[key] = [handler];
@@ -114,7 +116,7 @@ export class MessageBroker {
         handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>),
         options?: Options.AssertQueue): Promise<() => void> {
 
-        const key = JSON.stringify({ exchange: '', routingKey: queue });
+        const key = JSON.stringify({ exchange: '', routingKey: '', queue });
 
         if (this.queues[key]) {
             /*Si la queue existe déjà*/
@@ -138,7 +140,7 @@ export class MessageBroker {
                 this.queues[key].map(async (h) => await h(msg, ack));
             }
         );
-        return () => this.unsubscribe(queue, handler);
+        return () => this.unsubscribe(key, handler);
     }
 
     public unsubscribe(key: string, handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>)): void {
@@ -159,7 +161,31 @@ export class MessageBroker {
             port: Number(process.env.RABBITMQ_PORT) || 5672
         };
 
-        this.connection = await connect(config);
+        while (!this.connection) {
+            try {
+                console.error("[AMQP] Connecting...");
+                this.connection = await connect(config);
+                console.error("[AMQP] Successfull connection");
+            } catch (err) {
+                console.error('[AMQP] Connection failed', err);
+                console.error(`[AMQP] New connection attempt in ${this.timeout} ms`);
+                await this.delay(this.timeout);
+            }
+        }
+
+        this.connection.on('error', (err) => {
+            if (err.message !== 'Connection closing') {
+                console.error('[AMQP] Connection error', err.message);
+            }
+        });
+
+        this.connection.on('close', async () => {
+            console.error('[AMQP] Connection has been closed');
+            console.error('[AMQP] Restarting connection to RabbitMQ');
+            this.connection = null;
+            await this.init()
+        });
+
         this.channel = await this.connection.createChannel();
 
         if (process.env.RABBITMQ_PREFETCH) {
@@ -169,12 +195,24 @@ export class MessageBroker {
         }
 
         this.rpcQueue = await this.channel.assertQueue('', {
-            exclusive: false
+            exclusive: false,
+            autoDelete: true
         });
 
         this.listenRPC();
+        this.restartQueues();
 
         return this;
+    }
+
+    private delay(milliseconds: number) {
+        return new Promise(resolve => {
+            setTimeout(resolve, milliseconds);
+        });
+    }
+
+    private async restartQueues() {
+        /*TODO reconnecter les queues*/
     }
 
     private listenRPC(): void {
