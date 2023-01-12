@@ -9,6 +9,10 @@ export class MessageBroker {
         if (!MessageBroker.instance) {
             const broker = new MessageBroker();
             MessageBroker.instance = broker.init();
+
+            process.on('SIGINT', async () => await broker.disconnect());
+            process.on('SIGTERM', async () => await broker.disconnect());
+            process.on('SIGQUIT', async () => await broker.disconnect());
         }
         return MessageBroker.instance;
     }
@@ -24,6 +28,8 @@ export class MessageBroker {
     private rpcQueue: Replies.AssertQueue;
     private correlationIds: any[] = [];
     private responseEmitter: EventEmitter = new EventEmitter();
+
+    private isDisconnected = false;
 
     private constructor() {
         this.responseEmitter.setMaxListeners(0);
@@ -148,8 +154,19 @@ export class MessageBroker {
     }
 
     public async disconnect(): Promise<void> {
-        await this.channel.close();
-        await this.connection.close();
+        this.isDisconnected = true;
+        if (this.connection && this.channel) {
+            await this.clearRPC();
+            await this.channel.close();
+            await this.connection.close();
+        }
+
+    }
+
+    private async clearRPC(): Promise<void> {
+        if (this.channel && this.rpcQueue?.queue) {
+            await this.channel.deleteQueue(this.rpcQueue.queue);
+        }
     }
 
     private async init(): Promise<MessageBroker> {
@@ -180,10 +197,13 @@ export class MessageBroker {
         });
 
         this.connection.on('close', async () => {
-            console.error('[AMQP] Connection has been closed');
-            console.error('[AMQP] Restarting connection to RabbitMQ');
-            this.connection = null;
-            await this.init()
+            if (!this.isDisconnected) {
+                console.error('[AMQP] Connection has been closed');
+                console.error('[AMQP] Restarting connection to RabbitMQ');
+                this.connection = null;
+                await this.init();
+            }
+
         });
 
         this.channel = await this.connection.createChannel();
@@ -194,13 +214,14 @@ export class MessageBroker {
             await this.channel.prefetch(+process.env.PREFETCH);
         }
 
-        this.rpcQueue = await this.channel.assertQueue('', {
-            exclusive: false,
-            autoDelete: true
-        });
+        if (!this.rpcQueue) {
+            this.rpcQueue = await this.channel.assertQueue(process.env.RABBITMQ_RPCQUEUE || '', {
+                exclusive: false,
+            });
+        }
 
         this.listenRPC();
-        this.restartQueues();
+        await this.restartQueues();
 
         return this;
     }
@@ -213,19 +234,32 @@ export class MessageBroker {
 
     private async restartQueues() {
         /*TODO reconnecter les queues*/
+        // console.log('queueLst', Object.keys(this.queues))
+
+        // await Promise.all(Object.keys(this.queues).map(async (key) => {
+        //     const { exchange, routingKey, queue } = JSON.parse(key);
+
+        //     console.log('queue', queue);
+        //     await this.subscribe(queue, async (msg, ack) => {
+        //         console.log('Message from queue:', msg.content.toString());
+        //         ack();
+        //     })
+
+        // }));
     }
 
     private listenRPC(): void {
         this.channel.consume(this.rpcQueue.queue, (msg) => {
-            const index = this.correlationIds.indexOf(msg.properties.correlationId, 0);
-            if (index !== -1) {
-                this.responseEmitter.emit(
-                    msg.properties.correlationId,
-                    JSON.parse(msg.content.toString('utf8')),
-                );
-                this.correlationIds.splice(index, 1);
+            if (msg) {
+                const index = this.correlationIds.indexOf(msg.properties.correlationId, 0);
+                if (index !== -1) {
+                    this.responseEmitter.emit(
+                        msg.properties.correlationId,
+                        JSON.parse(msg.content.toString('utf8')),
+                    );
+                    this.correlationIds.splice(index, 1);
+                }
             }
         }, { noAck: true });
     }
-
 }
