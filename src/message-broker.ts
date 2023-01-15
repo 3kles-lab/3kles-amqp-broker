@@ -2,7 +2,6 @@ import { Channel, connect, Connection, ConsumeMessage, Options, Replies } from '
 import _ from 'lodash';
 import { EventEmitter } from 'events';
 import * as uuid from 'uuid';
-import { exit } from 'process';
 
 type Override<T1, T2> = Omit<T1, keyof T2> & T2;
 
@@ -195,7 +194,7 @@ export class MessageBroker {
             await this.channel.close();
             await this.connection.close();
         }
-        exit();
+        process.exit();
     }
 
     private async clearRPC(): Promise<void> {
