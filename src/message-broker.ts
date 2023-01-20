@@ -60,9 +60,9 @@ export class MessageBroker {
         return this.channel.publish(exchange, routingKey, msg);
     }
 
-    public async send(queue: string, msg: Buffer, options?: Options.Publish): Promise<boolean> {
-        await this.channel.assertQueue(queue, { durable: true });
-        return this.channel.sendToQueue(queue, msg, options);
+    public async send(queue: string, msg: Buffer, optionPublish?: Options.Publish, optionAssert?: Options.AssertQueue): Promise<boolean> {
+        await this.channel.assertQueue(queue, { durable: true, ...optionAssert });
+        return this.channel.sendToQueue(queue, msg, optionPublish);
     }
 
     public async sendRPCMessage(queue: string, msg: Buffer): Promise<any> {
@@ -123,7 +123,7 @@ export class MessageBroker {
 
         if (keys.length) {
             await this.channel.assertExchange(exchange, type, options);
-            const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue });
+            const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue, exclusive: !!!queue });
             await Promise.all(routingKeys.map((routingKey) => this.channel.bindQueue(q.queue, exchange, routingKey)));
 
             keys.forEach((key, i) => {
@@ -173,7 +173,7 @@ export class MessageBroker {
         }
 
         await this.channel.assertExchange(exchange, type, options);
-        const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue });
+        const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue, exclusive: !!!queue });
         await this.channel.bindQueue(queue, exchange, routingKey);
 
         this.exchanges.set(key, {
