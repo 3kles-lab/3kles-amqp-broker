@@ -103,9 +103,62 @@ export class MessageBroker {
         );
     }
 
-    public async subscribeExchange(queue: string, exchange: string, routingKey: string, type: string = 'direct',
+    private async subscribeExchangeMultiRoutingkey(queue: string, exchange: string, routingKeys: string[], type: string = 'direct',
         handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>),
         options?: Options.AssertExchange): Promise<any> {
+
+        let keys = routingKeys.map((routingKey) => JSON.stringify({ exchange, routingKey, queue }));
+
+        const unsubscribes = keys.filter((key) => this.exchanges.has(key) && this.exchanges.get(key).active)
+            .map((key) => {
+                const existingHandler = _.find(this.exchanges.get(key).handler, (h) => h === handler);
+                if (existingHandler) {
+                    /* Si on a déjà souscrit à la queue*/
+                    return () => this.unsubscribe(key, existingHandler);
+                }
+                this.exchanges.get(key).handler.push(handler);
+                return () => this.unsubscribe(key, handler);
+            });
+        keys = keys.filter((key) => !(this.exchanges.has(key) && this.exchanges.get(key).active));
+
+        if (keys.length) {
+            await this.channel.assertExchange(exchange, type, options);
+            const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue });
+            await Promise.all(routingKeys.map((routingKey) => this.channel.bindQueue(q.queue, exchange, routingKey)));
+
+            keys.forEach((key, i) => {
+                this.exchanges.set(key, {
+                    exchange,
+                    queue,
+                    routingKey: routingKeys[i],
+                    type,
+                    options,
+                    active: true,
+                    handler: [handler]
+                });
+            });
+
+            this.channel.consume(
+                q.queue,
+                async (msg) => {
+                    const ack = _.once(() => this.channel.ack(msg));
+                    this.exchanges.get(keys[0]).handler.forEach((h) => h(msg, ack));
+                }
+            );
+            return () => keys.map((key) => () => this.unsubscribe(key, handler)).concat(unsubscribes).forEach((u) => u());
+        } else {
+            return () => unsubscribes.forEach((u) => u());
+        }
+
+    }
+
+    public async subscribeExchange(queue: string, exchange: string, routingKey: string | string[], type: string = 'direct',
+        handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>),
+        options?: Options.AssertExchange): Promise<any> {
+
+        if (Array.isArray(routingKey)) {
+            return await this.subscribeExchangeMultiRoutingkey(queue, exchange, routingKey, type, handler, options);
+        }
 
         const key = JSON.stringify({ exchange, routingKey, queue });
 
