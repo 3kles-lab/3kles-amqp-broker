@@ -105,7 +105,7 @@ export class MessageBroker {
 
     private async subscribeExchangeMultiRoutingkey(queue: string, exchange: string, routingKeys: string[], type: string = 'direct',
         handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>),
-        options?: Options.AssertExchange): Promise<any> {
+        options?: Options.AssertExchange, optionsQueue?: Options.AssertQueue): Promise<any> {
 
         let keys = routingKeys.map((routingKey) => JSON.stringify({ exchange, routingKey, queue }));
 
@@ -123,7 +123,7 @@ export class MessageBroker {
 
         if (keys.length) {
             await this.channel.assertExchange(exchange, type, options);
-            const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue, exclusive: !!!queue });
+            const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue, exclusive: !!!queue, ...optionsQueue });
             await Promise.all(routingKeys.map((routingKey) => this.channel.bindQueue(q.queue, exchange, routingKey)));
 
             keys.forEach((key, i) => {
@@ -154,10 +154,10 @@ export class MessageBroker {
 
     public async subscribeExchange(queue: string, exchange: string, routingKey: string | string[], type: string = 'direct',
         handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>),
-        options?: Options.AssertExchange): Promise<any> {
+        options?: Options.AssertExchange, optionsQueue?: Options.AssertQueue): Promise<any> {
 
         if (Array.isArray(routingKey)) {
-            return await this.subscribeExchangeMultiRoutingkey(queue, exchange, routingKey, type, handler, options);
+            return await this.subscribeExchangeMultiRoutingkey(queue, exchange, routingKey, type, handler, options, optionsQueue);
         }
 
         const key = JSON.stringify({ exchange, routingKey, queue });
@@ -173,7 +173,7 @@ export class MessageBroker {
         }
 
         await this.channel.assertExchange(exchange, type, options);
-        const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue, exclusive: !!!queue });
+        const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue, exclusive: !!!queue, ...optionsQueue });
         await this.channel.bindQueue(queue, exchange, routingKey);
 
         this.exchanges.set(key, {
