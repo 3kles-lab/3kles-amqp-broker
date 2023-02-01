@@ -307,7 +307,7 @@ export class MessageBroker {
             });
         }
 
-        this.listenRPC();
+        await this.listenRPC();
         await this.restartQueues();
         await this.restartExchanges();
 
@@ -346,18 +346,24 @@ export class MessageBroker {
         }));
     }
 
-    private listenRPC(): void {
-        this.channel.consume(this.rpcQueue.queue, (msg) => {
-            if (msg) {
-                const index = this.correlationIds.indexOf(msg.properties.correlationId, 0);
-                if (index !== -1) {
-                    this.responseEmitter.emit(
-                        msg.properties.correlationId,
-                        JSON.parse(msg.content.toString('utf8')),
-                    );
-                    this.correlationIds.splice(index, 1);
+    private async listenRPC(): Promise<void> {
+        try {
+            await this.channel.consume(this.rpcQueue.queue, (msg) => {
+                if (msg) {
+                    const index = this.correlationIds.indexOf(msg.properties.correlationId, 0);
+                    if (index !== -1) {
+                        this.responseEmitter.emit(
+                            msg.properties.correlationId,
+                            JSON.parse(msg.content.toString('utf8')),
+                        );
+                        this.correlationIds.splice(index, 1);
+                    }
                 }
-            }
-        }, { noAck: true });
+            }, { noAck: true });
+        } catch (err) {
+            this.rpcQueue = null;
+            console.error('[AMQP]', err);
+        }
+
     }
 }
