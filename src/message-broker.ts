@@ -347,23 +347,18 @@ export class MessageBroker {
     }
 
     private async listenRPC(): Promise<void> {
-        try {
-            await this.channel.consume(this.rpcQueue.queue, (msg) => {
-                if (msg) {
-                    const index = this.correlationIds.indexOf(msg.properties.correlationId, 0);
-                    if (index !== -1) {
-                        this.responseEmitter.emit(
-                            msg.properties.correlationId,
-                            JSON.parse(msg.content.toString('utf8')),
-                        );
-                        this.correlationIds.splice(index, 1);
-                    }
+        await this.channel.consume(this.rpcQueue.queue, (msg) => {
+            if (msg) {
+                const index = this.correlationIds.indexOf(msg.properties.correlationId, 0);
+                if (index !== -1) {
+                    this.responseEmitter.emit(
+                        msg.properties.correlationId,
+                        JSON.parse(msg.content.toString('utf8')),
+                    );
+                    this.correlationIds.splice(index, 1);
                 }
-            }, { noAck: true });
-        } catch (err) {
-            this.rpcQueue = null;
-            console.error('[AMQP]', err);
-        }
+            }
+        }, { noAck: true });
 
     }
 }
