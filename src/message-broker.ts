@@ -19,22 +19,40 @@ type ExchangeConfig = Override<QueueConfig, {
     options?: Options.AssertExchange;
 }>;
 
+type InstanceConfig = {
+    connect?: Options.Connect,
+    prefetch?: number,
+    disableRPC?: boolean
+}
 
 export class MessageBroker {
 
-    public static async getInstance(): Promise<MessageBroker> {
-        if (!MessageBroker.instance) {
-            const broker = new MessageBroker();
-            MessageBroker.instance = broker.init();
-
-            process.on('SIGINT', async () => await broker.disconnect());
-            process.on('SIGTERM', async () => await broker.disconnect());
-            process.on('SIGQUIT', async () => await broker.disconnect());
+    public static getInstance(index: number | string = 0): Promise<MessageBroker> {
+        if (!MessageBroker.instance[index]) {
+            return this.initInstance(index);
         }
+        return MessageBroker.instance[index];
+    }
+
+    public static initInstance(index: number | string = 0, config: InstanceConfig = { disableRPC: false }): Promise<MessageBroker> {
+
+        if (MessageBroker.instance[index]) {
+            throw new Error(`[AMQP] Instance ${index} already exist`);
+        }
+
+        const broker = new MessageBroker(index, config);
+        MessageBroker.instance[index] = broker.init(config?.connect);
+        process.on('SIGINT', async () => await broker.disconnect());
+        process.on('SIGTERM', async () => await broker.disconnect());
+        process.on('SIGQUIT', async () => await broker.disconnect());
+        return MessageBroker.instance[index];
+    }
+
+    public static getAllInstances(): Promise<MessageBroker>[] {
         return MessageBroker.instance;
     }
 
-    private static instance: Promise<MessageBroker>;
+    private static instance: Promise<MessageBroker>[] = [];
     private connection: Connection;
     public channel: Channel;
 
@@ -49,7 +67,7 @@ export class MessageBroker {
 
     private isDisconnected: boolean = false;
 
-    private constructor() {
+    private constructor(private name: number | string, private config?: InstanceConfig) {
         this.responseEmitter.setMaxListeners(0);
     }
 
@@ -66,6 +84,11 @@ export class MessageBroker {
     }
 
     public async sendRPCMessage(queue: string, msg: Buffer): Promise<any> {
+
+        if (this.config?.disableRPC) {
+            throw new Error(`[AMQP] RPC is disable for instance ${this.name}`);
+        }
+
         await this.channel.assertQueue(queue, { durable: false });
 
         return new Promise<any>((resolve) => {
@@ -256,13 +279,14 @@ export class MessageBroker {
         }
     }
 
-    private async init(): Promise<MessageBroker> {
+    private async init(conf: Options.Connect = {}): Promise<MessageBroker> {
         const config: Options.Connect = {
             hostname: process.env.RABBITMQ_URL || 'localhost',
             protocol: process.env.RABBITMQ_PROTOCOL || 'amqp',
             username: process.env.RABBITMQ_USERNAME,
             password: process.env.RABBITMQ_PASSWORD,
-            port: Number(process.env.RABBITMQ_PORT) || 5672
+            port: Number(process.env.RABBITMQ_PORT) || 5672,
+            ...conf
         };
 
         while (!this.connection) {
@@ -295,19 +319,31 @@ export class MessageBroker {
 
         this.channel = await this.connection.createChannel();
 
-        if (process.env.RABBITMQ_PREFETCH) {
-            await this.channel.prefetch(+process.env.RABBITMQ_PREFETCH);
-        } else if (process.env.PREFETCH) {
-            await this.channel.prefetch(+process.env.PREFETCH);
+        let warningPrefetch = true;
+
+        if (this.config?.prefetch) {
+            await this.channel.prefetch(this.config?.prefetch);
+            warningPrefetch = false;
+        }
+        else if (process.env.RABBITMQ_PREFETCH || process.env.PREFETCH) {
+            await this.channel.prefetch(+process.env.RABBITMQ_PREFETCH || +process.env.PREFETCH);
+            warningPrefetch = false;
         }
 
-        if (!this.rpcQueue) {
-            this.rpcQueue = await this.channel.assertQueue(process.env.RABBITMQ_RPCQUEUE || '', {
-                exclusive: false,
-            });
+        if (warningPrefetch) {
+            console.warn('[AMQP] Warning, No prefetch defined for the instance', this.name);
         }
 
-        await this.listenRPC();
+        if (!this.config?.disableRPC) {
+            if (!this.rpcQueue) {
+                this.rpcQueue = await this.channel.assertQueue(process.env.RABBITMQ_RPCQUEUE || '', {
+                    exclusive: false,
+                    expires: 1800000 //expire after 30 minutes with no consumer and no activity
+                });
+            }
+
+            await this.listenRPC();
+        }
         await this.restartQueues();
         await this.restartExchanges();
 
