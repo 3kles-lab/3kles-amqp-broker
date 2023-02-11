@@ -75,12 +75,12 @@ export class MessageBroker {
         type: string = 'direct', options?: Options.AssertExchange): Promise<boolean> {
 
         await this.channel.assertExchange(exchange, type, options);
-        return this.channel.publish(exchange, routingKey, msg);
+        return this.channel.publish(exchange, routingKey, msg, { timestamp: Date.now() });
     }
 
     public async send(queue: string, msg: Buffer, optionPublish?: Options.Publish, optionAssert?: Options.AssertQueue): Promise<boolean> {
         await this.channel.assertQueue(queue, { durable: true, ...optionAssert });
-        return this.channel.sendToQueue(queue, msg, optionPublish);
+        return this.channel.sendToQueue(queue, msg, { timestamp: Date.now(), ...optionPublish });
     }
 
     public async sendRPCMessage(queue: string, msg: Buffer): Promise<any> {
@@ -115,7 +115,8 @@ export class MessageBroker {
                     this.channel.sendToQueue(msg.properties.replyTo,
                         Buffer.from(response),
                         {
-                            correlationId: msg.properties.correlationId
+                            correlationId: msg.properties.correlationId,
+                            timestamp: Date.now()
                         }
                     );
                     this.channel.ack(msg);
