@@ -72,10 +72,10 @@ export class MessageBroker {
     }
 
     public async sendToExchange(exchange: string, routingKey: string, msg: Buffer,
-        type: string = 'direct', options?: Options.AssertExchange): Promise<boolean> {
+        type: string = 'direct', optionAssert?: Options.AssertExchange, optionPublish?: Options.Publish): Promise<boolean> {
 
-        await this.channel.assertExchange(exchange, type, options);
-        return this.channel.publish(exchange, routingKey, msg, { timestamp: Date.now() });
+        await this.channel.assertExchange(exchange, type, optionAssert);
+        return this.channel.publish(exchange, routingKey, msg, { timestamp: Date.now(), ...optionPublish });
     }
 
     public async send(queue: string, msg: Buffer, optionPublish?: Options.Publish, optionAssert?: Options.AssertQueue): Promise<boolean> {
