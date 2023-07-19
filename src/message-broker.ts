@@ -18,6 +18,7 @@ type ExchangeConfig = Override<QueueConfig, {
     exchange: string;
     routingKey: string;
     options?: Options.AssertExchange;
+    optionsQueue?: Options.AssertQueue;
 }>;
 
 type InstanceConfig = {
@@ -206,6 +207,7 @@ export class MessageBroker {
             routingKey,
             type,
             options,
+            optionsQueue: { durable: true, autoDelete: !!!queue, exclusive: !!!queue, ...optionsQueue },
             active: true,
             handler: [handler]
         });
@@ -338,7 +340,7 @@ export class MessageBroker {
     private async restartExchanges(): Promise<void> {
         await Promise.all(Array.from(this.exchanges.values()).flatMap((q) => {
             return q.handler.map((h) => {
-                return this.subscribeExchange(q.queue, q.exchange, q.routingKey, q.type, h, q.options);
+                return this.subscribeExchange(q.queue, q.exchange, q.routingKey, q.type, h, q.options, q.optionsQueue);
             });
         }));
     }
