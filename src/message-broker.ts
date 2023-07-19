@@ -10,7 +10,8 @@ type QueueConfig = {
     queue: string;
     options?: Options.AssertQueue;
     active: boolean;
-    handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>)[];
+    handler: ((msg: ConsumeMessage, ack: (response?: any) => any) => Promise<any>)[];
+    rpc?: boolean;
 };
 
 type ExchangeConfig = Override<QueueConfig, {
@@ -107,6 +108,15 @@ export class MessageBroker {
 
     public async receiveRPCMessage(queue: string, handler: ((msg: ConsumeMessage, ack: (response: string) => void) => Promise<void>)): Promise<void> {
         await this.channel.assertQueue(queue, { durable: false });
+
+        const key = JSON.stringify({ exchange: '', routingKey: '', queue });
+
+        this.queues.set(key, {
+            handler: [handler],
+            queue,
+            active: true,
+            rpc: true
+        });
 
         this.channel.consume(
             queue,
@@ -332,7 +342,11 @@ export class MessageBroker {
     private async restartQueues(): Promise<void> {
         await Promise.all(Array.from(this.queues.values()).flatMap((q) => {
             return q.handler.map((h) => {
-                return this.subscribe(q.queue, h, q.options);
+                if (q.rpc) {
+                    return this.receiveRPCMessage(q.queue, h);
+                } else {
+                    return this.subscribe(q.queue, h, q.options);
+                }
             });
         }));
     }
