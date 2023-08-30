@@ -168,6 +168,7 @@ export class MessageBroker {
                     routingKey: routingKeys[i],
                     type,
                     options,
+                    optionsQueue: { durable: true, autoDelete: !!!queue, exclusive: !!!queue, ...optionsQueue },
                     active: true,
                     handler: [handler]
                 });
