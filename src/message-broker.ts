@@ -10,7 +10,7 @@ type QueueConfig = {
     queue: string;
     options?: Options.AssertQueue;
     active: boolean;
-    handler: ((msg: ConsumeMessage, ack: (response?: any) => any) => Promise<any>)[];
+    handler: ((msg: ConsumeMessage, ack: (response?: any, allUpTo?: boolean) => any, nack: (response?: any, allUpTo?: boolean, requeue?: boolean) => any) => Promise<any>)[];
     rpc?: boolean;
 };
 
@@ -106,7 +106,8 @@ export class MessageBroker {
         });
     }
 
-    public async receiveRPCMessage(queue: string, handler: ((msg: ConsumeMessage, ack: (response: string) => void) => Promise<void>)): Promise<void> {
+    public async receiveRPCMessage(queue: string, handler: ((msg: ConsumeMessage, ack: (response: string, allUpTo?: boolean) => void,
+        nack: (allUpTo?: boolean, requeue?: boolean) => void) => Promise<void>)): Promise<void> {
         await this.channel.assertQueue(queue, { durable: false });
 
         const key = JSON.stringify({ exchange: '', routingKey: '', queue });
@@ -132,14 +133,14 @@ export class MessageBroker {
                     );
                     this.channel.ack(msg);
                 });
-
-                await handler(msg, ack);
+                const nack = _.once((allUpTo?: boolean, requeue?: boolean) => this.channel.nack(msg, allUpTo, requeue));
+                await handler(msg, ack, nack);
             }
         );
     }
 
     private async subscribeExchangeMultiRoutingkey(queue: string, exchange: string, routingKeys: string[], type: string = 'direct',
-        handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>),
+        handler: ((msg: ConsumeMessage, ack: () => void, nack: () => void) => Promise<void>),
         options?: Options.AssertExchange, optionsQueue?: Options.AssertQueue): Promise<any> {
 
         let keys = routingKeys.map((routingKey) => JSON.stringify({ exchange, routingKey, queue }));
@@ -177,8 +178,9 @@ export class MessageBroker {
             this.channel.consume(
                 q.queue,
                 async (msg) => {
-                    const ack = _.once(() => this.channel.ack(msg));
-                    this.exchanges.get(keys[0]).handler.forEach((h) => h(msg, ack));
+                    const ack = _.once((allUpTo?) => this.channel.ack(msg, allUpTo));
+                    const nack = _.once((allUpTo?: boolean, requeue?: boolean) => this.channel.nack(msg, allUpTo, requeue));
+                    this.exchanges.get(keys[0]).handler.forEach((h) => h(msg, ack, nack));
                 }
             );
             return () => keys.map((key) => () => this.unsubscribe(key, handler)).concat(unsubscribes).forEach((u) => u());
@@ -189,7 +191,7 @@ export class MessageBroker {
     }
 
     public async subscribeExchange(queue: string, exchange: string, routingKey: string | string[], type: string = 'direct',
-        handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>),
+        handler: ((msg: ConsumeMessage, ack: (allUpTo?: boolean) => void, nack: (allUpTo?: boolean, requeue?: boolean) => void) => Promise<void>),
         options?: Options.AssertExchange, optionsQueue?: Options.AssertQueue): Promise<any> {
 
         if (Array.isArray(routingKey)) {
@@ -227,14 +229,15 @@ export class MessageBroker {
             q.queue,
             async (msg) => {
                 const ack = _.once(() => this.channel.ack(msg));
-                this.exchanges.get(key).handler.forEach((h) => h(msg, ack));
+                const nack = _.once((requeue?: boolean) => this.channel.nack(msg, false, requeue));
+                this.exchanges.get(key).handler.forEach((h) => h(msg, ack, nack));
             }
         );
         return () => this.unsubscribe(key, handler);
     }
 
     public async subscribe(queue: string,
-        handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>),
+        handler: ((msg: ConsumeMessage, ack: (allUpTo?: boolean) => void, nack: (allUpTo?: boolean, requeue?: boolean) => void) => Promise<void>),
         options?: Options.AssertQueue): Promise<() => void> {
 
         const key = JSON.stringify({ exchange: '', routingKey: '', queue });
@@ -262,14 +265,15 @@ export class MessageBroker {
         this.channel.consume(
             queue,
             async (msg) => {
-                const ack = _.once(() => this.channel.ack(msg));
-                this.queues.get(key).handler.map(async (h) => await h(msg, ack));
+                const ack = _.once((allUpTo?: boolean) => this.channel.ack(msg, allUpTo));
+                const nack = _.once((allUpTo?: boolean, requeue?: boolean) => this.channel.nack(msg, allUpTo, requeue));
+                this.queues.get(key).handler.map(async (h) => await h(msg, ack, nack));
             }
         );
         return () => this.unsubscribe(key, handler);
     }
 
-    public unsubscribe(key: string, handler: ((msg: ConsumeMessage, ack: () => void) => Promise<void>)): void {
+    public unsubscribe(key: string, handler: ((msg: ConsumeMessage, ack: () => void, nack: () => void) => Promise<void>)): void {
         if (this.queues.has(key)) {
             _.pull(this.queues.get(key).handler, handler);
         } else if (this.exchanges.has(key)) {
