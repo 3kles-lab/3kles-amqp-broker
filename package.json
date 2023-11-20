@@ -1,6 +1,6 @@
 {
   "name": "@3kles/3kles-amqpbroker",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "3KLES AMQP Message broker",
   "keywords": [],
   "main": "dist/index.js",
