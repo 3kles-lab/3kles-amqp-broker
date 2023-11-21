@@ -3,6 +3,9 @@ import _ from 'lodash';
 import { EventEmitter } from 'events';
 import * as uuid from 'uuid';
 import { ConnectionManager } from './connection-manager';
+import { v4 as uuidv4 } from 'uuid';
+import { Consumer } from './consumer';
+
 
 type Override<T1, T2> = Omit<T1, keyof T2> & T2;
 
@@ -12,6 +15,7 @@ type QueueConfig = {
     active: boolean;
     handler: ((msg: ConsumeMessage, ack: (response?: any, allUpTo?: boolean) => any, nack: (response?: any, allUpTo?: boolean, requeue?: boolean) => any) => Promise<any>)[];
     rpc?: boolean;
+    consumerTag?: string;
 };
 
 type ExchangeConfig = Override<QueueConfig, {
@@ -67,7 +71,6 @@ export class MessageBroker {
     private rpcQueue: Replies.AssertQueue;
     private correlationIds: any[] = [];
     private responseEmitter: EventEmitter = new EventEmitter();
-
 
     private constructor(private name: number | string, private config?: InstanceConfig) {
         this.responseEmitter.setMaxListeners(0);
@@ -141,7 +144,7 @@ export class MessageBroker {
 
     private async subscribeExchangeMultiRoutingkey(queue: string, exchange: string, routingKeys: string[], type: string = 'direct',
         handler: ((msg: ConsumeMessage, ack: () => void, nack: () => void) => Promise<void>),
-        options?: Options.AssertExchange, optionsQueue?: Options.AssertQueue): Promise<any> {
+        options?: Options.AssertExchange, optionsQueue?: Options.AssertQueue): Promise<Consumer[]> {
 
         let keys = routingKeys.map((routingKey) => JSON.stringify({ exchange, routingKey, queue }));
 
@@ -150,10 +153,12 @@ export class MessageBroker {
                 const existingHandler = _.find(this.exchanges.get(key).handler, (h) => h === handler);
                 if (existingHandler) {
                     /* Si on a déjà souscrit à la queue*/
-                    return () => this.unsubscribe(key, existingHandler);
+                    // return () => this.unsubscribe(key, existingHandler);
+                    return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
                 }
                 this.exchanges.get(key).handler.push(handler);
-                return () => this.unsubscribe(key, handler);
+                // return () => this.unsubscribe(key, handler);
+                return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
             });
         keys = keys.filter((key) => !(this.exchanges.has(key) && this.exchanges.get(key).active));
 
@@ -161,6 +166,8 @@ export class MessageBroker {
             await this.channel.assertExchange(exchange, type, options);
             const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue, exclusive: !!!queue, ...optionsQueue });
             await Promise.all(routingKeys.map((routingKey) => this.channel.bindQueue(q.queue, exchange, routingKey)));
+
+            const consumerTag = uuidv4();
 
             keys.forEach((key, i) => {
                 this.exchanges.set(key, {
@@ -171,28 +178,23 @@ export class MessageBroker {
                     options,
                     optionsQueue: { durable: true, autoDelete: !!!queue, exclusive: !!!queue, ...optionsQueue },
                     active: true,
-                    handler: [handler]
+                    handler: [handler],
+                    consumerTag
                 });
             });
 
-            this.channel.consume(
-                q.queue,
-                async (msg) => {
-                    const ack = _.once((allUpTo?) => this.channel.ack(msg, allUpTo));
-                    const nack = _.once((allUpTo?: boolean, requeue?: boolean) => this.channel.nack(msg, allUpTo, requeue));
-                    this.exchanges.get(keys[0]).handler.forEach((h) => h(msg, ack, nack));
-                }
-            );
-            return () => keys.map((key) => () => this.unsubscribe(key, handler)).concat(unsubscribes).forEach((u) => u());
+            await this.consume(q.queue, this.exchanges.get(keys[0]).handler, consumerTag);
+
+            return keys.map((key) => new Consumer(this, consumerTag, key, handler)).concat(unsubscribes);
         } else {
-            return () => unsubscribes.forEach((u) => u());
+            return unsubscribes;
         }
 
     }
 
     public async subscribeExchange(queue: string, exchange: string, routingKey: string | string[], type: string = 'direct',
         handler: ((msg: ConsumeMessage, ack: (allUpTo?: boolean) => void, nack: (allUpTo?: boolean, requeue?: boolean) => void) => Promise<void>),
-        options?: Options.AssertExchange, optionsQueue?: Options.AssertQueue): Promise<any> {
+        options?: Options.AssertExchange, optionsQueue?: Options.AssertQueue): Promise<Consumer | Consumer[]> {
 
         if (Array.isArray(routingKey)) {
             return await this.subscribeExchangeMultiRoutingkey(queue, exchange, routingKey, type, handler, options, optionsQueue);
@@ -204,15 +206,19 @@ export class MessageBroker {
             const existingHandler = _.find(this.exchanges.get(key).handler, (h) => h === handler);
             if (existingHandler) {
                 /* Si on a déjà souscrit à la queue*/
-                return () => this.unsubscribe(key, existingHandler);
+                // return () => this.unsubscribe(key, existingHandler);
+                return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
             }
             this.exchanges.get(key).handler.push(handler);
-            return () => this.unsubscribe(key, handler);
+            // return () => this.unsubscribe(key, handler);
+            return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
         }
 
         await this.channel.assertExchange(exchange, type, options);
         const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue, exclusive: !!!queue, ...optionsQueue });
         await this.channel.bindQueue(queue, exchange, routingKey);
+
+        const consumerTag = uuidv4();
 
         this.exchanges.set(key, {
             exchange,
@@ -222,23 +228,18 @@ export class MessageBroker {
             options,
             optionsQueue: { durable: true, autoDelete: !!!queue, exclusive: !!!queue, ...optionsQueue },
             active: true,
-            handler: [handler]
+            handler: [handler],
+            consumerTag
         });
 
-        this.channel.consume(
-            q.queue,
-            async (msg) => {
-                const ack = _.once(() => this.channel.ack(msg));
-                const nack = _.once((requeue?: boolean) => this.channel.nack(msg, false, requeue));
-                this.exchanges.get(key).handler.forEach((h) => h(msg, ack, nack));
-            }
-        );
-        return () => this.unsubscribe(key, handler);
+        await this.consume(q.queue, this.exchanges.get(key).handler, consumerTag);
+        // return () => this.unsubscribe(key, handler);
+        return new Consumer(this, consumerTag, key, handler);
     }
 
     public async subscribe(queue: string,
         handler: ((msg: ConsumeMessage, ack: (allUpTo?: boolean) => void, nack: (allUpTo?: boolean, requeue?: boolean) => void) => Promise<void>),
-        options?: Options.AssertQueue): Promise<() => void> {
+        options?: Options.AssertQueue): Promise<Consumer> {
 
         const key = JSON.stringify({ exchange: '', routingKey: '', queue });
 
@@ -247,30 +248,27 @@ export class MessageBroker {
             const existingHandler = _.find(this.queues.get(key).handler, (h) => h === handler);
             if (existingHandler) {
                 /* Si on a déjà souscrit à la queue*/
-                return () => this.unsubscribe(key, existingHandler);
+                return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
             }
             this.queues.get(key).handler.push(handler);
-            return () => this.unsubscribe(key, handler);
+            return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
         }
 
         await this.channel.assertQueue(queue, options);
+
+        const consumerTag = uuidv4();
 
         this.queues.set(key, {
             handler: [handler],
             queue,
             active: true,
-            options
+            options,
+            consumerTag
         });
 
-        this.channel.consume(
-            queue,
-            async (msg) => {
-                const ack = _.once((allUpTo?: boolean) => this.channel.ack(msg, allUpTo));
-                const nack = _.once((allUpTo?: boolean, requeue?: boolean) => this.channel.nack(msg, allUpTo, requeue));
-                this.queues.get(key).handler.map(async (h) => await h(msg, ack, nack));
-            }
-        );
-        return () => this.unsubscribe(key, handler);
+        await this.consume(queue, this.queues.get(key).handler, consumerTag);
+        // return () => this.unsubscribe(key, handler);
+        return new Consumer(this, consumerTag, key, handler);
     }
 
     public unsubscribe(key: string, handler: ((msg: ConsumeMessage, ack: () => void, nack: () => void) => Promise<void>)): void {
@@ -291,7 +289,44 @@ export class MessageBroker {
             console.error(`[AMQP] Error while disconnecting instance ${this.name}`);
             console.error(err);
         }
+    }
 
+    public async pause(consumerTag: string): Promise<void> {
+        await this.channel.cancel(consumerTag);
+    }
+
+    public async resume(consumerTag: string): Promise<void> {
+        const config = this.getConfigFromConsumerTag(consumerTag);
+        if (config) {
+            await this.channel.cancel(consumerTag);
+            await this.consume(config.queue, config.handler, config.consumerTag);
+        }
+    }
+
+    private getConfigFromConsumerTag(consumerTag: string): (QueueConfig | ExchangeConfig) {
+        return Array.from(this.queues.entries()).find(([key, value]) => value.consumerTag === consumerTag)?.[1]
+            || Array.from(this.exchanges.entries()).find(([key, value]) => value.consumerTag === consumerTag)?.[1];
+    }
+
+    private async consume(queue: string,
+        handlers:
+            ((
+                msg: ConsumeMessage,
+                ack: (response?: any, allUpTo?: boolean) => any,
+                nack: (response?: any, allUpTo?: boolean, requeue?: boolean) => any
+            ) => Promise<any>)[],
+        consumerTag?: string): Promise<Replies.Consume> {
+        return await this.channel.consume(
+            queue,
+            async (msg) => {
+                const ack = _.once((allUpTo?: boolean) => this.channel.ack(msg, allUpTo));
+                const nack = _.once((allUpTo?: boolean, requeue?: boolean) => this.channel.nack(msg, allUpTo, requeue));
+                handlers.map(async (h) => await h(msg, ack, nack));
+            },
+            {
+                consumerTag
+            }
+        );
     }
 
     private async clearRPC(): Promise<void> {
