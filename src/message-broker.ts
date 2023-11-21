@@ -306,6 +306,7 @@ export class MessageBroker {
 
             for (const config of configs) {
                 if (this.isExchangeconfig(config)) {
+                    await this.channel.assertExchange(config.exchange, config.type, config.options);
                     await this.channel.bindQueue(config.queue, config.exchange, config.routingKey);
                 }
             }
