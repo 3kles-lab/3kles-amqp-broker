@@ -296,16 +296,32 @@ export class MessageBroker {
     }
 
     public async resume(consumerTag: string): Promise<void> {
-        const config = this.getConfigFromConsumerTag(consumerTag);
-        if (config) {
+        const configs = this.getConfigFromConsumerTag(consumerTag);
+        if (configs.length) {
             await this.channel.cancel(consumerTag);
-            await this.consume(config.queue, config.handler, config.consumerTag);
+
+            const q = await (this.isExchangeconfig(configs[0]) ? this.channel.assertQueue(configs[0].queue,
+                { durable: true, autoDelete: !!!configs[0].queue, exclusive: !!!configs[0].queue, ...configs[0].optionsQueue })
+                : this.channel.assertQueue(configs[0].queue, configs[0].options));
+
+            for (const config of configs) {
+                if (this.isExchangeconfig(config)) {
+                    await this.channel.bindQueue(config.queue, config.exchange, config.routingKey);
+                }
+            }
+            await this.consume(q.queue, configs[0].handler, configs[0].consumerTag);
+
         }
     }
 
-    private getConfigFromConsumerTag(consumerTag: string): (QueueConfig | ExchangeConfig) {
-        return Array.from(this.queues.entries()).find(([key, value]) => value.consumerTag === consumerTag)?.[1]
-            || Array.from(this.exchanges.entries()).find(([key, value]) => value.consumerTag === consumerTag)?.[1];
+    private isExchangeconfig(config: QueueConfig | ExchangeConfig): config is ExchangeConfig {
+        return (config as ExchangeConfig).exchange !== undefined;
+    }
+
+    private getConfigFromConsumerTag(consumerTag: string): (QueueConfig | ExchangeConfig)[] {
+        return [...Array.from(this.exchanges.entries()), ...Array.from(this.queues.entries())].filter(([key, value]) => {
+            return value.consumerTag === consumerTag;
+        }).map(([key, value]) => value);
     }
 
     private async consume(queue: string,
