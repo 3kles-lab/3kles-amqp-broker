@@ -154,11 +154,11 @@ export class MessageBroker {
                 if (existingHandler) {
                     /* Si on a déjà souscrit à la queue*/
                     // return () => this.unsubscribe(key, existingHandler);
-                    return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
+                    return new Consumer(this, this.exchanges.get(key).consumerTag, key, handler);
                 }
                 this.exchanges.get(key).handler.push(handler);
                 // return () => this.unsubscribe(key, handler);
-                return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
+                return new Consumer(this, this.exchanges.get(key).consumerTag, key, handler);
             });
         keys = keys.filter((key) => !(this.exchanges.has(key) && this.exchanges.get(key).active));
 
@@ -207,11 +207,11 @@ export class MessageBroker {
             if (existingHandler) {
                 /* Si on a déjà souscrit à la queue*/
                 // return () => this.unsubscribe(key, existingHandler);
-                return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
+                return new Consumer(this, this.exchanges.get(key).consumerTag, key, handler);
             }
             this.exchanges.get(key).handler.push(handler);
             // return () => this.unsubscribe(key, handler);
-            return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
+            return new Consumer(this, this.exchanges.get(key).consumerTag, key, handler);
         }
 
         await this.channel.assertExchange(exchange, type, options);
