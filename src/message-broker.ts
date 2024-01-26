@@ -6,6 +6,10 @@ import { ConnectionManager } from './connection-manager';
 import { v4 as uuidv4 } from 'uuid';
 import { Consumer } from './consumer';
 
+enum Type {
+    EXCHANGE,
+    QUEUE
+};
 
 type Override<T1, T2> = Omit<T1, keyof T2> & T2;
 
@@ -29,7 +33,8 @@ type ExchangeConfig = Override<QueueConfig, {
 type InstanceConfig = {
     connectionManager?: ConnectionManager,
     prefetch?: number,
-    disableRPC?: boolean
+    disableRPC?: boolean,
+    cancelNotification?: boolean
 };
 
 export class MessageBroker {
@@ -183,7 +188,7 @@ export class MessageBroker {
                 });
             });
 
-            await this.consume(q.queue, this.exchanges.get(keys[0]).handler, consumerTag);
+            await this.consume(q.queue, this.exchanges.get(keys[0]).handler, consumerTag, Type.EXCHANGE);
 
             return keys.map((key) => new Consumer(this, consumerTag, key, handler)).concat(unsubscribes);
         } else {
@@ -232,7 +237,7 @@ export class MessageBroker {
             consumerTag
         });
 
-        await this.consume(q.queue, this.exchanges.get(key).handler, consumerTag);
+        await this.consume(q.queue, this.exchanges.get(key).handler, consumerTag, Type.EXCHANGE);
         // return () => this.unsubscribe(key, handler);
         return new Consumer(this, consumerTag, key, handler);
     }
@@ -266,7 +271,7 @@ export class MessageBroker {
             consumerTag
         });
 
-        await this.consume(queue, this.queues.get(key).handler, consumerTag);
+        await this.consume(queue, this.queues.get(key).handler, consumerTag, Type.QUEUE);
         // return () => this.unsubscribe(key, handler);
         return new Consumer(this, consumerTag, key, handler);
     }
@@ -310,8 +315,7 @@ export class MessageBroker {
                     await this.channel.bindQueue(config.queue, config.exchange, config.routingKey);
                 }
             }
-            await this.consume(q.queue, configs[0].handler, configs[0].consumerTag);
-
+            await this.consume(q.queue, configs[0].handler, configs[0].consumerTag, this.isExchangeconfig(configs[0]) ? Type.EXCHANGE : Type.QUEUE);
         }
     }
 
@@ -332,13 +336,25 @@ export class MessageBroker {
                 ack: (response?: any, allUpTo?: boolean) => any,
                 nack: (response?: any, allUpTo?: boolean, requeue?: boolean) => any
             ) => Promise<any>)[],
-        consumerTag?: string): Promise<Replies.Consume> {
+        consumerTag: string, type: Type): Promise<Replies.Consume> {
         return await this.channel.consume(
             queue,
             async (msg) => {
+                if (!msg) {
+                    if (type === Type.QUEUE) {
+                        await this.restartQueueAfterKill(queue, consumerTag);
+                    } else if (type === Type.EXCHANGE) {
+                        await this.restartExchangeAfterKill(queue, consumerTag);
+                    }
+                }
+
+                if (!msg && !this.config?.cancelNotification) {
+                    return;
+                }
                 const ack = _.once((allUpTo?: boolean) => this.channel.ack(msg, allUpTo));
                 const nack = _.once((allUpTo?: boolean, requeue?: boolean) => this.channel.nack(msg, allUpTo, requeue));
                 handlers.map(async (h) => await h(msg, ack, nack));
+
             },
             {
                 consumerTag
@@ -394,6 +410,33 @@ export class MessageBroker {
             this.queues.set(key, { ...value, active: false });
         });
         return await this.init();
+    }
+
+    private async restartQueueAfterKill(queue: string, consumerTag?: string): Promise<void> {
+        console.warn(`[AMQP] Warning consumer on queue ${queue} has been cancelled`);
+        console.warn(`[AMQP] Re-creation of consumer on queue ${queue}`);
+        await Promise.all(Array.from(this.queues.values())
+            .filter((q) => q.queue === queue && !q.rpc && (consumerTag ? q.consumerTag === consumerTag : true))
+            .flatMap((q) => {
+                q.active = false;
+                return q.handler.map((h) => {
+                    return this.subscribe(q.queue, h, q.options);
+                });
+            }));
+    }
+
+    private async restartExchangeAfterKill(queue: string, consumerTag?: string): Promise<void> {
+        console.warn(`[AMQP] Warning consumer on exchange with queue ${queue} has been cancelled`);
+        console.warn(`[AMQP] Re-creation of consumer on queue ${queue}`);
+
+        await Promise.all(Array.from(this.exchanges.values())
+            .filter((q) => (consumerTag ? q.consumerTag === consumerTag : true) && q.queue === queue)
+            .flatMap((q) => {
+                q.active = false;
+                return q.handler.map((h) => {
+                    return this.subscribeExchange(q.queue, q.exchange, q.routingKey, q.type, h, q.options, q.optionsQueue);
+                });
+            }));
     }
 
     private async restartQueues(): Promise<void> {
