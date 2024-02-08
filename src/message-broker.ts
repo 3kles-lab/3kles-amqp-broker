@@ -188,7 +188,7 @@ export class MessageBroker {
                 });
             });
 
-            await this.consume(q.queue, this.exchanges.get(keys[0]).handler, consumerTag, Type.EXCHANGE);
+            await this.consume(this.channel, q.queue, this.exchanges.get(keys[0]).handler, consumerTag, Type.EXCHANGE);
 
             return keys.map((key) => new Consumer(this, consumerTag, key, handler)).concat(unsubscribes);
         } else {
@@ -237,7 +237,7 @@ export class MessageBroker {
             consumerTag
         });
 
-        await this.consume(q.queue, this.exchanges.get(key).handler, consumerTag, Type.EXCHANGE);
+        await this.consume(this.channel, q.queue, this.exchanges.get(key).handler, consumerTag, Type.EXCHANGE);
         // return () => this.unsubscribe(key, handler);
         return new Consumer(this, consumerTag, key, handler);
     }
@@ -271,7 +271,7 @@ export class MessageBroker {
             consumerTag
         });
 
-        await this.consume(queue, this.queues.get(key).handler, consumerTag, Type.QUEUE);
+        await this.consume(this.channel, queue, this.queues.get(key).handler, consumerTag, Type.QUEUE);
         // return () => this.unsubscribe(key, handler);
         return new Consumer(this, consumerTag, key, handler);
     }
@@ -288,6 +288,9 @@ export class MessageBroker {
         try {
             if (this.channel) {
                 await this.clearRPC();
+                if (!process.env.RABBITMQ_RECOVER || process.env.RABBITMQ_RECOVER === 'true') {
+                    await this.channel.recover();
+                }
                 await this.channel.close();
             }
         } catch (err) {
@@ -315,7 +318,7 @@ export class MessageBroker {
                     await this.channel.bindQueue(config.queue, config.exchange, config.routingKey);
                 }
             }
-            await this.consume(q.queue, configs[0].handler, configs[0].consumerTag, this.isExchangeconfig(configs[0]) ? Type.EXCHANGE : Type.QUEUE);
+            await this.consume(this.channel, q.queue, configs[0].handler, configs[0].consumerTag, this.isExchangeconfig(configs[0]) ? Type.EXCHANGE : Type.QUEUE);
         }
     }
 
@@ -329,7 +332,7 @@ export class MessageBroker {
         }).map(([key, value]) => value);
     }
 
-    private async consume(queue: string,
+    private async consume(channel: Channel, queue: string,
         handlers:
             ((
                 msg: ConsumeMessage,
@@ -337,7 +340,7 @@ export class MessageBroker {
                 nack: (response?: any, allUpTo?: boolean, requeue?: boolean) => any
             ) => Promise<any>)[],
         consumerTag: string, type: Type): Promise<Replies.Consume> {
-        return await this.channel.consume(
+        return await channel.consume(
             queue,
             async (msg) => {
                 if (!msg) {
@@ -351,10 +354,24 @@ export class MessageBroker {
                 if (!msg && !this.config?.cancelNotification) {
                     return;
                 }
-                const ack = _.once((allUpTo?: boolean) => this.channel.ack(msg, allUpTo));
-                const nack = _.once((allUpTo?: boolean, requeue?: boolean) => this.channel.nack(msg, allUpTo, requeue));
-                handlers.map(async (h) => await h(msg, ack, nack));
+                const ack = _.once((allUpTo?: boolean) => {
+                    try {
+                        channel.ack(msg, allUpTo);
+                    } catch (err) {
+                        console.error(`[AMQP] Error while ACK`);
+                        console.error(err);
+                    }
 
+                });
+                const nack = _.once((allUpTo?: boolean, requeue?: boolean) => {
+                    try {
+                        channel.nack(msg, allUpTo, requeue);
+                    } catch (err) {
+                        console.error(`[AMQP] Error while NACK`);
+                        console.error(err);
+                    }
+                });
+                await Promise.all(handlers.map((h) => h(msg, ack, nack)));
             },
             {
                 consumerTag
