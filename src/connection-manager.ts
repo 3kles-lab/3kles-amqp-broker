@@ -62,7 +62,7 @@ export class ConnectionManager {
             }
         });
 
-        this.connection.on('close', async () => {
+        this.connection.once('close', async () => {
             if (!this.isDisconnected) {
                 console.error('[AMQP] Connection has been closed');
                 console.error('[AMQP] Restarting connection to RabbitMQ');
