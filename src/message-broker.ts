@@ -34,7 +34,8 @@ type InstanceConfig = {
     connectionManager?: ConnectionManager,
     prefetch?: number,
     disableRPC?: boolean,
-    cancelNotification?: boolean
+    cancelNotification?: boolean,
+    recover?: boolean;
 };
 
 export class MessageBroker {
@@ -288,7 +289,7 @@ export class MessageBroker {
         try {
             if (this.channel) {
                 await this.clearRPC();
-                if (!process.env.RABBITMQ_RECOVER || process.env.RABBITMQ_RECOVER === 'true') {
+                if (this.config?.recover !== undefined ? this.config?.recover : true) {
                     await this.channel.recover();
                 }
                 await this.channel.close();
