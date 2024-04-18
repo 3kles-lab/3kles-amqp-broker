@@ -245,7 +245,7 @@ export class MessageBroker {
 
     public async subscribe(queue: string,
         handler: ((msg: ConsumeMessage, ack: (allUpTo?: boolean) => void, nack: (allUpTo?: boolean, requeue?: boolean) => void) => Promise<void>),
-        options?: Options.AssertQueue): Promise<Consumer> {
+        options?: Options.AssertQueue, optionConsume?: Options.Consume): Promise<Consumer> {
 
         const key = JSON.stringify({ exchange: '', routingKey: '', queue });
 
@@ -272,7 +272,7 @@ export class MessageBroker {
             consumerTag
         });
 
-        await this.consume(this.channel, queue, this.queues.get(key).handler, consumerTag, Type.QUEUE);
+        await this.consume(this.channel, queue, this.queues.get(key).handler, consumerTag, Type.QUEUE, optionConsume);
         // return () => this.unsubscribe(key, handler);
         return new Consumer(this, consumerTag, key, handler);
     }
@@ -340,7 +340,7 @@ export class MessageBroker {
                 ack: (response?: any, allUpTo?: boolean) => any,
                 nack: (response?: any, allUpTo?: boolean, requeue?: boolean) => any
             ) => Promise<any>)[],
-        consumerTag: string, type: Type): Promise<Replies.Consume> {
+        consumerTag: string, type: Type, optionConsume?: Options.Consume): Promise<Replies.Consume> {
         return await channel.consume(
             queue,
             async (msg) => {
@@ -375,7 +375,8 @@ export class MessageBroker {
                 await Promise.all(handlers.map((h) => h(msg, ack, nack)));
             },
             {
-                consumerTag
+                ...optionConsume,
+                consumerTag,
             }
         );
     }

@@ -16,6 +16,36 @@ try {
 
         const broker = await MessageBroker.initInstance(0, { prefetch: 1 });
 
+        // broker.send('queueStream', Buffer.from(JSON.stringify({ content: { aa: 1234 } })), {}, { arguments: { 'x-queue-type': 'stream' } });
+
+
+        await broker.subscribe('queueStream', async (msg, ack) => {
+            try {
+                console.log('Message from queue:', msg.content.toString());
+
+            } catch (err) {
+                console.error(err);
+            }
+
+            ack();
+        }, { arguments: { 'x-queue-type': 'stream' } }, { arguments: { "x-stream-offset": "first" } });
+
+
+        // await broker.subscribeExchange('', 'event', ['toto'], 'topic', async (msg, ack) => {
+        //     if (msg) {
+        //         console.log('ici', msg.content.toString());
+        //         try {
+        //             const notification = JSON.parse(msg.content.toString());
+        //             // await this.emitMessage(notification);
+        //         } catch (err) {
+        //             console.error(err);
+        //         }
+        //         ack();
+        //     }
+        // }, { durable: false });
+
+        // await broker.sendToExchange('event', 'toto', Buffer.from(JSON.stringify({content: {aa: 1234}})), 'topic', { durable: false });
+
         // for (let i = 5; i > 0; i--) {
 
         //     console.log('i',i)
@@ -41,9 +71,9 @@ try {
         // await broker.subscribe('abcd', async (msg, ack) => {
         //     try {
         //         console.log('Message from queue:', msg.content.toString());
-        //         // await new Promise(resolve => {
-        //         //     setTimeout(resolve, 1500);
-        //         // });
+        //         await new Promise(resolve => {
+        //             setTimeout(resolve, 2000);
+        //         });
         //         console.log('fin ')
 
         //     } catch (err) {
@@ -56,9 +86,7 @@ try {
         // let i = 0;
         // while (true) {
         //     await broker.send('abcd', Buffer.from('message LOW priority ' + i), {});
-        //     await new Promise(resolve => {
-        //             setTimeout(resolve, 1500);
-        //         });
+
         //     i++;
         // }
 
@@ -107,22 +135,22 @@ try {
 
 
 
-        const consumers = (await broker.subscribeExchange('aaaa', 'test.exchange', ['test.routingKey1', 'test.routingKey2'], 'direct', async (msg, ack) => {
-            console.log('Message from exchange :', msg.content.toString());
-            ack();
-        }, { autoDelete: true }, { maxPriority: 10, })) as Consumer[];
+        // const consumers = (await broker.subscribeExchange('aaaa', 'test.exchange', ['test.routingKey1', 'test.routingKey2'], 'direct', async (msg, ack) => {
+        //     console.log('Message from exchange :', msg.content.toString());
+        //     ack();
+        // }, { autoDelete: true }, { maxPriority: 10, })) as Consumer[];
 
-        await new Promise(resolve => {
-            setTimeout(resolve, 2500);
-        });
-        console.log('pause')
-        await consumers[0].pause()
+        // await new Promise(resolve => {
+        //     setTimeout(resolve, 2500);
+        // });
+        // console.log('pause')
+        // await consumers[0].pause()
 
-        await new Promise(resolve => {
-            setTimeout(resolve, 2500);
-        });
-        console.log('resume')
-        await consumers[0].resume()
+        // await new Promise(resolve => {
+        //     setTimeout(resolve, 2500);
+        // });
+        // console.log('resume')
+        // await consumers[0].resume()
 
         // console.log(consumers);
         // (async () => {
