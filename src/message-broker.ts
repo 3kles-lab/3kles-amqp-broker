@@ -397,12 +397,17 @@ export class MessageBroker {
             warningPrefetch = false;
         }
         else if (process.env.RABBITMQ_PREFETCH || process.env.PREFETCH) {
+
+            if (isNaN(+process.env.RABBITMQ_PREFETCH || +process.env.PREFETCH)) {
+                throw new Error('RABBITMQ_PREFETCH or PREFETCH is not a number');
+            }
+
             await this.channel.prefetch(+process.env.RABBITMQ_PREFETCH || +process.env.PREFETCH);
             warningPrefetch = false;
         }
 
         if (warningPrefetch) {
-            console.warn('[AMQP] Warning, No prefetch defined for the instance', this.name);
+            console.warn('\x1b[31m','[AMQP] Warning, No prefetch defined for the instance', this.name);
         }
 
         if (!this.config?.disableRPC) {
