@@ -94,6 +94,25 @@ export class MessageBroker {
         return this.channel.sendToQueue(queue, msg, { timestamp: Date.now(), ...optionPublish });
     }
 
+    public async sendRPCToExchange(exchange: string, routingKey: string, msg: Buffer,
+        type: string = 'direct', optionAssert?: Options.AssertExchange): Promise<any> {
+
+        if (this.config?.disableRPC) {
+            throw new Error(`[AMQP] RPC is disable for instance ${this.name}`);
+        }
+
+        await this.channel.assertExchange(exchange, type, { durable: false, autoDelete: true, ...optionAssert });
+
+        return new Promise<any>((resolve) => {
+            const correlationId = uuid.v4();
+            this.correlationIds.push(correlationId);
+
+            this.responseEmitter.once(correlationId, resolve);
+            this.channel.publish(exchange, routingKey, msg, { timestamp: Date.now(), replyTo: this.rpcQueue.queue, correlationId });
+        });
+
+    }
+
     public async sendRPCMessage(queue: string, msg: Buffer): Promise<any> {
 
         if (this.config?.disableRPC) {
@@ -222,7 +241,7 @@ export class MessageBroker {
 
         await this.channel.assertExchange(exchange, type, options);
         const q = await this.channel.assertQueue(queue, { durable: true, autoDelete: !!!queue, exclusive: !!!queue, ...optionsQueue });
-        await this.channel.bindQueue(queue, exchange, routingKey);
+        await this.channel.bindQueue(q.queue, exchange, routingKey);
 
         const consumerTag = uuidv4();
 
@@ -407,7 +426,7 @@ export class MessageBroker {
         }
 
         if (warningPrefetch) {
-            console.warn('\x1b[31m','[AMQP] Warning, No prefetch defined for the instance', this.name);
+            console.warn('\x1b[31m', '[AMQP] Warning, No prefetch defined for the instance', this.name);
         }
 
         if (!this.config?.disableRPC) {
