@@ -2,19 +2,16 @@
 	"compilerOptions": {
 		"declaration": true,
 		"module": "commonjs",
-		"target": "es5",
+		"target": "es2022",
 		"outDir": "dist",
+		"skipLibCheck": true,
 		"lib": [
 			"dom",
-			"ES2019",
 			"es5",
-			"es6",
-			"esnext.asynciterable"
+			"es6"
 		],
 		"noImplicitAny": false,
-		"sourceMap": true,
-		"resolveJsonModule": true,
-		"esModuleInterop": true
+		"sourceMap": true
 	},
 	"include": [
 		"src/**/*.ts"

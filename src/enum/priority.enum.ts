@@ -1,9 +1,10 @@
-export const KlesDefaultMaxPriority = 4;
 
 export enum KlesPriority {
-    VERY_HIGH = 4,
-    HIGH = 3,
-    MEDIUM = 2,
-    LOW = 1,
-    NOT = 0
+    VERY_HIGH = 5,
+    HIGH = 4,
+    MEDIUM = 3,
+    LOW = 2,
+    NOT = 1
 }
+
+export const KlesDefaultMaxPriority = KlesPriority.VERY_HIGH;

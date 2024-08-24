@@ -1,4 +1,4 @@
 include:
   - project: '3kles/template/gitlab-ci'
     ref: main
-    file: '/lib-gulp-npm/.gitlab-ci.yml'
+    file: '/lib-webpack-npm/.gitlab-ci.yml'
