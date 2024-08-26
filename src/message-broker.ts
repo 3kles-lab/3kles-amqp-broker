@@ -1,5 +1,5 @@
 import { Channel, connect, Connection, ConsumeMessage, Options, Replies } from 'amqplib';
-import _ from 'lodash';
+import * as _ from 'lodash';
 import { EventEmitter } from 'events';
 import * as uuid from 'uuid';
 import { ConnectionManager } from './connection-manager';
