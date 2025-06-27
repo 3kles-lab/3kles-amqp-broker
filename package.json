@@ -1,11 +1,22 @@
 {
   "name": "@3kles/3kles-amqpbroker",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "3KLES AMQP Message broker",
-  "keywords": [],
   "main": "dist/index.js",
   "typings": "dist/index.d.ts",
-  "author": "Charles Da Silva Costa",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/3kles-lab/3kles-amqp-broker"
+  },
+  "keywords": [
+    "3KLES",
+    "AMQP"
+  ],
+  "author": "3Kles Lab",
+  "bugs": {
+    "url": "https://github.com/3kles-lab/3kles-amqp-broker/issues"
+  },
+  "homepage": "https://github.com/3kles-lab/3kles-amqp-broker",
   "license": "ISC",
   "scripts": {
     "dev": "node -r ts-node/register test/app.ts",
