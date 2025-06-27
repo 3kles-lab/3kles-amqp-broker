@@ -30,7 +30,7 @@ export class ConnectionManager {
         return this.connections;
     }
 
-    public connection: Connection;
+    public connection: any;
     public brokers: MessageBroker[] = [];
     private isDisconnected: boolean;
 
