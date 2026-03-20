@@ -1,13 +1,12 @@
-import { MessageBroker } from "./message-broker";
+import { MessageBroker } from './message-broker';
 
 export class Consumer {
-
-    constructor(private broker: MessageBroker,
+    constructor(
+        private broker: MessageBroker,
         public readonly consumerTag: string,
         private readonly key: string,
-        private readonly handler: any) {
-
-    }
+        private readonly handler: any,
+    ) {}
 
     async pause(): Promise<void> {
         await this.broker.pause(this.consumerTag);
