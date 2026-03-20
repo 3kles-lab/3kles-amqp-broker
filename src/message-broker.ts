@@ -5,6 +5,7 @@ import * as uuid from 'uuid';
 import { ConnectionManager } from './connection-manager';
 import { v4 as uuidv4 } from 'uuid';
 import { Consumer } from './consumer';
+import { Logger } from 'pino';
 
 enum Type {
     EXCHANGE,
@@ -83,11 +84,14 @@ export class MessageBroker {
     private correlationIds: any[] = [];
     private responseEmitter: EventEmitter = new EventEmitter();
 
+    private logger: Logger<never, boolean>;
+
     private constructor(
         private name: number | string,
         private config?: InstanceConfig,
     ) {
         this.responseEmitter.setMaxListeners(0);
+        this.logger = this.config.connectionManager.logger;
     }
 
     public async sendToExchange(
@@ -373,8 +377,7 @@ export class MessageBroker {
                 await this.channel.close();
             }
         } catch (err) {
-            console.error(`[AMQP] Error while disconnecting instance ${this.name}`);
-            console.error(err);
+            this.logger.error({ err, instance: this.name }, `[AMQP] Error while disconnecting instance`);
         }
     }
 
@@ -454,16 +457,14 @@ export class MessageBroker {
                     try {
                         channel.ack(msg, allUpTo);
                     } catch (err) {
-                        console.error(`[AMQP] Error while ACK`);
-                        console.error(err);
+                        this.logger.error({ err }, `[AMQP] Error while ACK`);
                     }
                 });
                 const nack = _.once((allUpTo?: boolean, requeue?: boolean) => {
                     try {
                         channel.nack(msg, allUpTo, requeue);
                     } catch (err) {
-                        console.error(`[AMQP] Error while NACK`);
-                        console.error(err);
+                        this.logger.error({ err }, `[AMQP] Error while NACK`);
                     }
                 });
                 await Promise.all(handlers.map((h) => h(msg, ack, nack)));
@@ -499,7 +500,7 @@ export class MessageBroker {
         }
 
         if (warningPrefetch) {
-            console.warn('\x1b[31m', '[AMQP] Warning, No prefetch defined for the instance', this.name);
+            this.logger.warn({ instance: this.name }, `[AMQP] Warning, No prefetch defined for this instance`);
         }
 
         if (!this.config?.disableRPC) {
@@ -529,8 +530,9 @@ export class MessageBroker {
     }
 
     private async restartQueueAfterKill(queue: string, consumerTag?: string): Promise<void> {
-        console.warn(`[AMQP] Warning consumer on queue ${queue} has been cancelled`);
-        console.warn(`[AMQP] Re-creation of consumer on queue ${queue}`);
+        this.logger.warn(`[AMQP] Warning consumer on queue ${queue} has been cancelled`);
+        this.logger.warn(`[AMQP] Re-creation of consumer on queue ${queue}`);
+
         await Promise.all(
             Array.from(this.queues.values())
                 .filter((q) => q.queue === queue && !q.rpc && (consumerTag ? q.consumerTag === consumerTag : true))
@@ -544,8 +546,8 @@ export class MessageBroker {
     }
 
     private async restartExchangeAfterKill(queue: string, consumerTag?: string): Promise<void> {
-        console.warn(`[AMQP] Warning consumer on exchange with queue ${queue} has been cancelled`);
-        console.warn(`[AMQP] Re-creation of consumer on queue ${queue}`);
+        this.logger.warn(`[AMQP] Warning consumer on exchange with queue ${queue} has been cancelled`);
+        this.logger.warn(`[AMQP] Re-creation of consumer on queue ${queue}`);
 
         await Promise.all(
             Array.from(this.exchanges.values())
@@ -599,8 +601,7 @@ export class MessageBroker {
                 { noAck: true },
             );
         } catch (err) {
-            console.error('[AMQP] Error on listen rpc');
-            console.error(err);
+            this.logger.error({ err }, '[AMQP] Error on listen rpc');
             process.exit();
         }
     }
