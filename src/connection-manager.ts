@@ -127,8 +127,8 @@ export class ConnectionManager extends EventEmitter {
                 this.isConnected = true;
                 this.bindConnectionEvents(conn);
                 this.logger.info('[AMQP] Successful connection');
-                this.emit('connected', conn);
                 await Promise.all(this.brokers.map((b) => b.start()));
+                this.emit('connected', conn);
             } catch (err) {
                 this.isConnected = false;
                 const error = err instanceof Error ? err : new Error(String(err));
