@@ -124,7 +124,6 @@ export class MessageBroker {
         optionAssert?: Options.AssertQueue & { skipAssert?: boolean },
     ): Promise<boolean> {
         if (!optionAssert?.skipAssert) {
-            console.log('ici')
             await this.channel.assertQueue(queue, { durable: true, ...optionAssert });
         }
 
