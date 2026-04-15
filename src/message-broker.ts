@@ -24,7 +24,7 @@ type QueueConfig = {
         nack: (response?: any, allUpTo?: boolean, requeue?: boolean) => any,
     ) => Promise<any>)[];
     rpc?: boolean;
-    consumerTag?: string;
+    consumerTag: string;
 };
 
 type ExchangeConfig = Override<
@@ -46,6 +46,10 @@ type InstanceConfig = {
     recover?: boolean;
 };
 
+type InstanceConfigWithConnectionManager = InstanceConfig & {
+    connectionManager: ConnectionManager;
+};
+
 export class MessageBroker {
     public static async getInstance(index: number | string = 0): Promise<MessageBroker> {
         if (!MessageBroker.instance[index]) {
@@ -58,13 +62,14 @@ export class MessageBroker {
         if (MessageBroker.instance[index]) {
             throw new Error(`[AMQP] Instance ${index} already exist`);
         }
-        if (!config.connectionManager) {
-            config.connectionManager = await ConnectionManager.getConnexion();
+        let connectionManager = config.connectionManager;
+        if (!connectionManager) {
+            connectionManager = await ConnectionManager.getConnexion();
         }
 
-        const broker = new MessageBroker(index, config);
+        const broker = new MessageBroker(index, { ...config, connectionManager });
         MessageBroker.instance[index] = broker;
-        config.connectionManager.brokers.push(broker);
+        connectionManager.brokers.push(broker);
         await broker.start();
 
         return broker;
@@ -75,12 +80,12 @@ export class MessageBroker {
     }
 
     private static instance: Promise<MessageBroker>[] = [];
-    public channel: Channel;
+    public channel!: Channel;
 
     private exchanges: Map<string, ExchangeConfig> = new Map<string, ExchangeConfig>();
     private queues: Map<string, QueueConfig> = new Map<string, QueueConfig>();
 
-    private rpcQueue: Replies.AssertQueue;
+    private rpcQueue!: Replies.AssertQueue;
     private correlationIds: any[] = [];
     private responseEmitter: EventEmitter = new EventEmitter();
 
@@ -88,7 +93,7 @@ export class MessageBroker {
 
     private constructor(
         private name: number | string,
-        private config?: InstanceConfig,
+        private config: InstanceConfigWithConnectionManager,
     ) {
         this.responseEmitter.setMaxListeners(0);
         this.logger = this.config.connectionManager.logger;
@@ -99,18 +104,30 @@ export class MessageBroker {
         routingKey: string,
         msg: Buffer,
         type: 'direct' | 'topic' | 'headers' | 'fanout' | 'match' | string = 'direct',
-        optionAssert?: Options.AssertExchange,
+        optionAssert?: Options.AssertExchange & { skipAssert?: boolean },
         optionPublish?: Options.Publish,
     ): Promise<boolean> {
-        await this.channel.assertExchange(exchange, type, optionAssert);
+        if (!optionAssert?.skipAssert) {
+            await this.channel.assertExchange(exchange, type, optionAssert);
+        }
+
         return this.channel.publish(exchange, routingKey, msg, {
             timestamp: Date.now(),
             ...optionPublish,
         });
     }
 
-    public async send(queue: string, msg: Buffer, optionPublish?: Options.Publish, optionAssert?: Options.AssertQueue): Promise<boolean> {
-        await this.channel.assertQueue(queue, { durable: true, ...optionAssert });
+    public async send(
+        queue: string,
+        msg: Buffer,
+        optionPublish?: Options.Publish,
+        optionAssert?: Options.AssertQueue & { skipAssert?: boolean },
+    ): Promise<boolean> {
+        if (!optionAssert?.skipAssert) {
+            console.log('ici')
+            await this.channel.assertQueue(queue, { durable: true, ...optionAssert });
+        }
+
         return this.channel.sendToQueue(queue, msg, {
             timestamp: Date.now(),
             ...optionPublish,
@@ -122,17 +139,19 @@ export class MessageBroker {
         routingKey: string,
         msg: Buffer,
         type: 'direct' | 'topic' | 'headers' | 'fanout' | 'match' | string = 'direct',
-        optionAssert?: Options.AssertExchange,
+        optionAssert?: Options.AssertExchange & { skipAssert?: boolean },
     ): Promise<any> {
         if (this.config?.disableRPC) {
             throw new Error(`[AMQP] RPC is disable for instance ${this.name}`);
         }
 
-        await this.channel.assertExchange(exchange, type, {
-            durable: false,
-            autoDelete: true,
-            ...optionAssert,
-        });
+        if (!optionAssert?.skipAssert) {
+            await this.channel.assertExchange(exchange, type, {
+                durable: false,
+                autoDelete: true,
+                ...optionAssert,
+            });
+        }
 
         return new Promise<any>((resolve) => {
             const correlationId = uuid.v4();
@@ -178,23 +197,28 @@ export class MessageBroker {
 
         const key = JSON.stringify({ exchange: '', routingKey: '', queue });
 
+        const consumerTag = uuidv4();
+
         this.queues.set(key, {
             handler: [handler],
             queue,
             active: true,
             rpc: true,
+            consumerTag,
         });
 
         this.channel.consume(queue, async (msg) => {
-            const ack = _.once((response: string) => {
-                this.channel.sendToQueue(msg.properties.replyTo, Buffer.from(response), {
-                    correlationId: msg.properties.correlationId,
-                    timestamp: Date.now(),
+            if (msg) {
+                const ack = _.once((response: string) => {
+                    this.channel.sendToQueue(msg.properties.replyTo, Buffer.from(response), {
+                        correlationId: msg.properties.correlationId,
+                        timestamp: Date.now(),
+                    });
+                    this.channel.ack(msg);
                 });
-                this.channel.ack(msg);
-            });
-            const nack = _.once((allUpTo?: boolean, requeue?: boolean) => this.channel.nack(msg, allUpTo, requeue));
-            await handler(msg, ack, nack);
+                const nack = _.once((allUpTo?: boolean, requeue?: boolean) => this.channel.nack(msg, allUpTo, requeue));
+                await handler(msg, ack, nack);
+            }
         });
     }
 
@@ -204,28 +228,31 @@ export class MessageBroker {
         routingKeys: string[],
         type: 'direct' | 'topic' | 'headers' | 'fanout' | 'match' | string = 'direct',
         handler: (msg: ConsumeMessage, ack: () => void, nack: () => void) => Promise<void>,
-        options?: Options.AssertExchange,
+        options?: Options.AssertExchange & { skipAssert?: boolean },
         optionsQueue?: Options.AssertQueue,
     ): Promise<Consumer[]> {
         let keys = routingKeys.map((routingKey) => JSON.stringify({ exchange, routingKey, queue }));
 
-        const unsubscribes = keys
-            .filter((key) => this.exchanges.has(key) && this.exchanges.get(key).active)
-            .map((key) => {
-                const existingHandler = _.find(this.exchanges.get(key).handler, (h) => h === handler);
+        const unsubscribes: Consumer[] = keys
+            .filter((key) => this.exchanges.has(key) && this.exchanges.get(key) && this.exchanges.get(key)?.active)
+            .map<Consumer>((key) => {
+                const exchangeConfig = this.exchanges.get(key) as ExchangeConfig;
+
+                const existingHandler = _.find(exchangeConfig.handler, (h) => h === handler);
                 if (existingHandler) {
-                    /* Si on a déjà souscrit à la queue*/
-                    // return () => this.unsubscribe(key, existingHandler);
-                    return new Consumer(this, this.exchanges.get(key).consumerTag, key, handler);
+                    return new Consumer(this, exchangeConfig.consumerTag, key, handler);
                 }
-                this.exchanges.get(key).handler.push(handler);
-                // return () => this.unsubscribe(key, handler);
-                return new Consumer(this, this.exchanges.get(key).consumerTag, key, handler);
+                exchangeConfig.handler.push(handler);
+                return new Consumer(this, exchangeConfig?.consumerTag, key, handler);
             });
-        keys = keys.filter((key) => !(this.exchanges.has(key) && this.exchanges.get(key).active));
+
+        keys = keys.filter((key) => !(this.exchanges.has(key) && this.exchanges.get(key)?.active));
 
         if (keys.length) {
-            await this.channel.assertExchange(exchange, type, options);
+            if (!options?.skipAssert) {
+                await this.channel.assertExchange(exchange, type, options);
+            }
+
             const q = await this.channel.assertQueue(queue, {
                 durable: true,
                 autoDelete: !!!queue,
@@ -255,7 +282,12 @@ export class MessageBroker {
                 });
             });
 
-            await this.consume(this.channel, q.queue, this.exchanges.get(keys[0]).handler, consumerTag, Type.EXCHANGE);
+            if (this.exchanges.has(keys[0])) {
+                const exchangeConfig = this.exchanges.get(keys[0]);
+                if (exchangeConfig) {
+                    await this.consume(this.channel, q.queue, exchangeConfig.handler, consumerTag, Type.EXCHANGE);
+                }
+            }
 
             return keys.map((key) => new Consumer(this, consumerTag, key, handler)).concat(unsubscribes);
         } else {
@@ -278,16 +310,16 @@ export class MessageBroker {
 
         const key = JSON.stringify({ exchange, routingKey, queue });
 
-        if (this.exchanges.has(key) && this.exchanges.get(key).active) {
-            const existingHandler = _.find(this.exchanges.get(key).handler, (h) => h === handler);
-            if (existingHandler) {
-                /* Si on a déjà souscrit à la queue*/
-                // return () => this.unsubscribe(key, existingHandler);
-                return new Consumer(this, this.exchanges.get(key).consumerTag, key, handler);
+        if (this.exchanges.has(key)) {
+            const exchangeConfig = this.exchanges.get(key);
+            if (exchangeConfig && exchangeConfig.active) {
+                const existingHandler = _.find(exchangeConfig.handler, (h) => h === handler);
+                if (existingHandler) {
+                    return new Consumer(this, exchangeConfig.consumerTag, key, handler);
+                }
+                this.exchanges.get(key)?.handler.push(handler);
+                return new Consumer(this, exchangeConfig.consumerTag, key, handler);
             }
-            this.exchanges.get(key).handler.push(handler);
-            // return () => this.unsubscribe(key, handler);
-            return new Consumer(this, this.exchanges.get(key).consumerTag, key, handler);
         }
 
         await this.channel.assertExchange(exchange, type, options);
@@ -318,8 +350,10 @@ export class MessageBroker {
             consumerTag,
         });
 
-        await this.consume(this.channel, q.queue, this.exchanges.get(key).handler, consumerTag, Type.EXCHANGE);
-        // return () => this.unsubscribe(key, handler);
+        const exchangeConfig = this.exchanges.get(key);
+        if (exchangeConfig) {
+            await this.consume(this.channel, q.queue, exchangeConfig.handler, consumerTag, Type.EXCHANGE);
+        }
         return new Consumer(this, consumerTag, key, handler);
     }
 
@@ -331,15 +365,16 @@ export class MessageBroker {
     ): Promise<Consumer> {
         const key = JSON.stringify({ exchange: '', routingKey: '', queue });
 
-        if (this.queues.has(key) && this.queues.get(key).active) {
-            /*Si la queue existe déjà*/
-            const existingHandler = _.find(this.queues.get(key).handler, (h) => h === handler);
-            if (existingHandler) {
-                /* Si on a déjà souscrit à la queue*/
-                return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
+        if (this.queues.has(key)) {
+            const queueConfig = this.queues.get(key);
+            if (queueConfig && queueConfig?.active) {
+                const existingHandler = _.find(queueConfig.handler, (h) => h === handler);
+                if (existingHandler) {
+                    return new Consumer(this, queueConfig.consumerTag, key, handler);
+                }
+                this.queues.get(key)?.handler.push(handler);
+                return new Consumer(this, queueConfig.consumerTag, key, handler);
             }
-            this.queues.get(key).handler.push(handler);
-            return new Consumer(this, this.queues.get(key).consumerTag, key, handler);
         }
 
         await this.channel.assertQueue(queue, options);
@@ -354,16 +389,19 @@ export class MessageBroker {
             consumerTag,
         });
 
-        await this.consume(this.channel, queue, this.queues.get(key).handler, consumerTag, Type.QUEUE, optionConsume);
-        // return () => this.unsubscribe(key, handler);
+        const queueConfig = this.queues.get(key);
+        if (queueConfig) {
+            await this.consume(this.channel, queue, queueConfig.handler, consumerTag, Type.QUEUE, optionConsume);
+        }
+
         return new Consumer(this, consumerTag, key, handler);
     }
 
     public unsubscribe(key: string, handler: (msg: ConsumeMessage, ack: () => void, nack: () => void) => Promise<void>): void {
         if (this.queues.has(key)) {
-            _.pull(this.queues.get(key).handler, handler);
+            _.pull(this.queues.get(key)?.handler, handler);
         } else if (this.exchanges.has(key)) {
-            _.pull(this.exchanges.get(key).handler, handler);
+            _.pull(this.exchanges.get(key)?.handler, handler);
         }
     }
 
@@ -453,21 +491,23 @@ export class MessageBroker {
                 if (!msg && !this.config?.cancelNotification) {
                     return;
                 }
-                const ack = _.once((allUpTo?: boolean) => {
-                    try {
-                        channel.ack(msg, allUpTo);
-                    } catch (err) {
-                        this.logger.error({ err }, `[AMQP] Error while ACK`);
-                    }
-                });
-                const nack = _.once((allUpTo?: boolean, requeue?: boolean) => {
-                    try {
-                        channel.nack(msg, allUpTo, requeue);
-                    } catch (err) {
-                        this.logger.error({ err }, `[AMQP] Error while NACK`);
-                    }
-                });
-                await Promise.all(handlers.map((h) => h(msg, ack, nack)));
+                if (msg) {
+                    const ack = _.once((allUpTo?: boolean) => {
+                        try {
+                            channel.ack(msg, allUpTo);
+                        } catch (err) {
+                            this.logger.error({ err }, `[AMQP] Error while ACK`);
+                        }
+                    });
+                    const nack = _.once((allUpTo?: boolean, requeue?: boolean) => {
+                        try {
+                            channel.nack(msg, allUpTo, requeue);
+                        } catch (err) {
+                            this.logger.error({ err }, `[AMQP] Error while NACK`);
+                        }
+                    });
+                    await Promise.all(handlers.map((h) => h(msg, ack, nack)));
+                }
             },
             {
                 ...optionConsume,
@@ -483,7 +523,7 @@ export class MessageBroker {
     }
 
     private async init(): Promise<MessageBroker> {
-        this.channel = await this.config.connectionManager.connection.createChannel();
+        this.channel = await this.config?.connectionManager?.connection.createChannel();
 
         let warningPrefetch = true;
 
@@ -491,12 +531,14 @@ export class MessageBroker {
             await this.channel.prefetch(this.config?.prefetch);
             warningPrefetch = false;
         } else if (process.env.RABBITMQ_PREFETCH || process.env.PREFETCH) {
-            if (isNaN(+process.env.RABBITMQ_PREFETCH || +process.env.PREFETCH)) {
+            if (process.env.RABBITMQ_PREFETCH && isNaN(+process.env.RABBITMQ_PREFETCH)) {
                 throw new Error('RABBITMQ_PREFETCH or PREFETCH is not a number');
+            } else if (process.env.PREFETCH && isNaN(+process.env.PREFETCH)) {
+                throw new Error('RABBITMQ_PREFETCH or PREFETCH is not a number');
+            } else {
+                await this.channel.prefetch(+(process.env.RABBITMQ_PREFETCH || process.env.PREFETCH || 0));
+                warningPrefetch = false;
             }
-
-            await this.channel.prefetch(+process.env.RABBITMQ_PREFETCH || +process.env.PREFETCH);
-            warningPrefetch = false;
         }
 
         if (warningPrefetch) {

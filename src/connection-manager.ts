@@ -2,7 +2,7 @@ import { ChannelModel, connect, Connection, Options } from 'amqplib';
 import { MessageBroker } from './message-broker';
 import { EventEmitter } from 'events';
 import { hostname } from 'os';
-import * as pino from 'pino';
+import pino from 'pino';
 import { err as errSerializer } from 'pino-std-serializers';
 
 process.on('SIGINT', async () => {
@@ -51,7 +51,7 @@ export class ConnectionManager extends EventEmitter {
     public brokers: MessageBroker[] = [];
 
     private isConnected = false;
-    private isDisconnected: boolean;
+    private isDisconnected: boolean = false;
 
     public logger = pino({
         level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
