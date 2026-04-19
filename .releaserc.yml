@@ -1,4 +1,4 @@
-repositoryUrl: "https://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker.git"
+repositoryUrl: "http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker.git"
 
 branches:
   - main
