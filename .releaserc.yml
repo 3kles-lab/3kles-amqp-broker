@@ -1,0 +1,29 @@
+branches:
+  - main
+  - name: alpha
+    prerelease: alpha
+    channel: alpha
+  - name: hotfix/**
+    prerelease: true
+
+plugins:
+  - "@semantic-release/commit-analyzer"
+  - "@semantic-release/release-notes-generator"
+  - "@semantic-release/changelog"
+  - - "@semantic-release/npm"
+    - npmPublish: false # Ne publie pas sur npm
+      pkgRoot: . # Dossier racine du package
+  - - "@semantic-release/git"
+    - assets:
+        - package.json
+        - package-lock.json
+        - CHANGELOG.md
+      message: |
+        chore(release): v${nextRelease.version}
+
+        🔖 Version: ${nextRelease.version}
+        📦 Release type: ${nextRelease.type}
+
+        📝 Notes de version:
+        ${nextRelease.notes}
+  - "@semantic-release/gitlab"
