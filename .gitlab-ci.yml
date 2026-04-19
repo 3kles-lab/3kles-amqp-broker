@@ -1,4 +1,90 @@
+variables:
+    NODE_VERSION: '24'
+
+stages:
+    - prepare
+    - quality
+    - security
+    - build
+    - release
+    - publish
+
 include:
-  - project: '3kles/template/gitlab-ci'
-    ref: main
-    file: '/lib-webpack-npm/.gitlab-ci.yml'
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-secrets/vault-kv-export@feature/rules
+      inputs:
+          job_name: 'nexus_creds'
+          stage: 'prepare'
+          vault_role: gitlab-nexus
+          kv_mount: ci
+          secret_path: nexus
+          mappings: |
+              NPM_TOKEN=token
+
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-secrets/vault-kv-export@feature/rules
+      inputs:
+          job_name: 'npmjs_creds'
+          stage: 'prepare'
+          vault_role: gitlab-npmjs
+          kv_mount: ci
+          secret_path: npmjs
+          mappings: |
+              NPM_TOKEN=token
+
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-security/gitleaks-scan@1.0.0
+      inputs:
+          stage: 'quality'
+
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-node/lint@1.2.0
+      inputs:
+          node_version: $NODE_VERSION
+          stage: 'quality'
+
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-security/trivy-fs@1.0.0
+      inputs:
+          stage: 'security'
+
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-node/build@1.2.0
+      inputs:
+          job_name: build
+          stage: build
+          auth_token: $NPM_TOKEN
+          node_version: $NODE_VERSION
+          needs:
+              - job: nexus_creds
+              - job: lint
+                optional: true
+              - job: trivy-fs
+                optional: true
+              - job: gitleaks-scan
+                optional: true
+
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-node/release@1.2.0
+      inputs:
+          node_version: $NODE_VERSION
+          stage: 'release'
+          needs:
+              - build
+
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-node/publish@1.2.0
+      inputs:
+          job_name: publish_internal
+          stage: publish
+          node_version: $NODE_VERSION
+          registry_url: $NPM_PRIVATE_REGISTRY_3KLES
+          auth_token: $NPM_TOKEN
+          needs:
+              - job: nexus_creds
+              - job: build
+                artifacts: true
+
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-node/publish@1.1.0
+      inputs:
+          job_name: publish_public
+          stage: publish
+          node_version: $NODE_VERSION
+          auth_token: $NPM_TOKEN
+          package_access: 'public'
+          needs:
+              - job: npmjs_creds
+              - job: build
+                artifacts: true
