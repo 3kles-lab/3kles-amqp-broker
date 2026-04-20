@@ -7,6 +7,10 @@ branches:
     channel: alpha
   - name: hotfix/**
     prerelease: true
+  - name: "release/1.x"
+    range: "1.x"
+    prerelease: false
+
 
 plugins:
   - "@semantic-release/commit-analyzer"
