@@ -30,7 +30,7 @@ include:
           mappings: |
               NPM_TOKEN=token
 
-    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-security/gitleaks-scan@1.1.0
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-security/gitleaks-scan@1.1.1
       inputs:
           stage: 'quality'
 
@@ -39,7 +39,7 @@ include:
           node_version: $NODE_VERSION
           stage: 'quality'
 
-    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-security/trivy-fs@1.1.0
+    - component: $CI_SERVER_FQDN/cicd/ci-components/ci-components-security/trivy-fs@1.1.1
       inputs:
           stage: 'security'
 
