@@ -12,6 +12,7 @@ branches:
     prerelease: false
   - name: "release/2.x"
     range: "2.x"
+    channel: 2.x
     prerelease: false
 
 
