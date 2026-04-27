@@ -1,3 +1,10 @@
+## [3.0.1](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.0.0...v3.0.1) (2026-04-27)
+
+
+### Bug Fixes
+
+* enable graceful shutdown ([7d571ec](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/commit/7d571ecd396c597601f540e9c825f605741b18c8))
+
 # [3.0.0](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v2.2.0...v3.0.0) (2026-04-27)
 
 
