@@ -1,188 +1,261 @@
-import { ChannelModel, connect, Connection, Options } from 'amqplib';
-import { MessageBroker } from './message-broker';
+import { ChannelModel, connect } from 'amqplib';
 import { EventEmitter } from 'events';
 import { hostname } from 'os';
-import pino from 'pino';
+import pino, { Logger } from 'pino';
 import { err as errSerializer } from 'pino-std-serializers';
 
-process.on('SIGINT', async () => {
-    await Promise.all(ConnectionManager.getConnexions().map((manager) => manager.disconnect()));
-    process.exit();
-});
-process.on('SIGTERM', async () => {
-    await Promise.all(ConnectionManager.getConnexions().map((manager) => manager.disconnect()));
-    process.exit();
-});
-process.on('SIGQUIT', async () => {
-    await Promise.all(ConnectionManager.getConnexions().map((manager) => manager.disconnect()));
-    process.exit();
-});
+import { ConnectionManagerConfig, ConnectionState } from './types/connection';
+import { delay, reconnectDelayWithJitter } from './utils/delay';
+import { AmqpConnectionError } from './errors';
 
-export interface ConnectOption {
-    clientProperties?: { env?: string; service: string; extras?: { [key: string]: string } };
-}
+const defaultLogger = pino({
+    level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
+    timestamp: pino.stdTimeFunctions.isoTime,
+    name: 'amqp-broker',
+    serializers: {
+        err(error) {
+            const e = errSerializer(error);
+            return {
+                type: e.type,
+                message: e.message,
+                stack: e.stack,
+                code: (e as any).code,
+                classId: (e as any).classId,
+                methodId: (e as any).methodId,
+            };
+        },
+    },
+});
 
 export class ConnectionManager extends EventEmitter {
-    private static connections: ConnectionManager[] = [];
+    private static readonly instances = new Map<string | number, Promise<ConnectionManager>>();
 
-    public static async getConnexion(index: number | string = 0): Promise<ConnectionManager> {
-        if (!ConnectionManager.connections[index]) {
-            await this.initConnexion(index);
+    public static get(name: string | number, config: ConnectionManagerConfig): Promise<ConnectionManager> {
+        let instance = this.instances.get(name);
+
+        if (!instance) {
+            instance = this.create(name, config);
+            this.instances.set(name, instance);
         }
-        return ConnectionManager.connections[index];
+
+        return instance;
     }
 
-    public static async initConnexion(index: number | string = 0, config?: Options.Connect, option?: ConnectOption, timeout?: number) {
-        if (ConnectionManager.connections[index]) {
-            throw new Error(`[AMQP] Connection ${index} already exist`);
+    public static async create(name: string | number, config: ConnectionManagerConfig): Promise<ConnectionManager> {
+        if (this.instances.has(name)) {
+            throw new AmqpConnectionError(`[AMQP] Connection "${name}" already exists`);
         }
-        const connectionManager = new ConnectionManager(config ?? undefined, option ?? undefined, timeout ?? undefined);
-        ConnectionManager.connections[index] = connectionManager;
-        await ConnectionManager.connections[index].createConnexion();
 
-        return connectionManager;
+        const manager = new ConnectionManager(name, config);
+        await manager.connect();
+        manager.enableGracefulShutdown();
+
+        return manager;
     }
 
-    public static getConnexions(): ConnectionManager[] {
-        return this.connections;
+    public static async disconnectAll(): Promise<void> {
+        const managers = await Promise.all([...this.instances.values()]);
+
+        await Promise.all(managers.map((manager) => manager.disconnect()));
     }
 
-    public connection: any;
-    public brokers: MessageBroker[] = [];
+    private connection: ChannelModel | null = null;
+    private state: ConnectionState = 'idle';
+    private connectPromise?: Promise<void>;
+    private reconnectAttempt = 0;
 
-    private isConnected = false;
-    private isDisconnected: boolean = false;
+    private readonly logger: Logger;
+    private readonly reconnectDelayMs: number;
 
-    public logger = pino({
-        level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
-        timestamp: pino.stdTimeFunctions.isoTime,
-        name: '3kles-amqpbroker',
-        mixin() {
-            return { ...(process.env.SERVICE_NAME && { service: process.env.SERVICE_NAME }) };
-        },
-        serializers: {
-            err(error) {
-                const e = errSerializer(error);
-                return {
-                    type: e.type,
-                    message: e.message,
-                    code: (e as any).code,
-                    classId: (e as any).classId,
-                    methodId: (e as any).methodId,
-                };
-            },
-        },
-    });
+    private constructor(
+        public readonly name: string | number,
+        private readonly config: ConnectionManagerConfig,
+    ) {
+        super();
+
+        this.logger = config.logger ?? defaultLogger;
+        this.reconnectDelayMs = config.reconnectDelayMs ?? 5_000;
+    }
 
     public get connected(): boolean {
-        return this.isConnected;
+        return this.state === 'connected' && !!this.connection;
     }
 
-    public onConnected(listener: (connection: Connection) => void): this {
+    public get currentState(): ConnectionState {
+        return this.state;
+    }
+
+    public get currentConnection(): ChannelModel {
+        if (!this.connection || this.state !== 'connected') {
+            throw new AmqpConnectionError('[AMQP] Connection is not ready');
+        }
+
+        return this.connection;
+    }
+
+    public enableGracefulShutdown() {
+        const shutdown = async () => {
+            await this.disconnect();
+        };
+
+        process.once('SIGINT', shutdown);
+        process.once('SIGTERM', shutdown);
+        process.once('SIGQUIT', shutdown);
+    }
+
+    public onConnected(listener: (connection: ChannelModel) => void | Promise<void>): this {
         this.on('connected', listener);
 
-        if (this.connection && this.isConnected) {
-            listener(this.connection);
+        if (this.connection && this.state === 'connected') {
+            void listener(this.connection);
         }
 
         return this;
     }
 
-    public onDisconnected(listener: (error?: Error) => void): this {
+    public onDisconnected(listener: () => void | Promise<void>): this {
         this.on('disconnected', listener);
         return this;
     }
 
-    private constructor(
-        private config: Options.Connect = {
-            hostname: process.env.RABBITMQ_URL || 'localhost',
-            protocol: process.env.RABBITMQ_PROTOCOL || 'amqp',
-            username: process.env.RABBITMQ_USERNAME,
-            password: process.env.RABBITMQ_PASSWORD,
-            port: Number(process.env.RABBITMQ_PORT) || 5672,
-        },
-        private option?: ConnectOption,
-        private timeout: number = Number(process.env.RABBITMQ_TIMEOUT) || 5000,
-    ) {
-        super();
-        this.setMaxListeners(0);
+    public async connect(): Promise<void> {
+        if (this.connectPromise) {
+            return this.connectPromise;
+        }
+
+        this.connectPromise = this.connectLoop().finally(() => {
+            this.connectPromise = undefined;
+        });
+
+        return this.connectPromise;
     }
 
-    private async createConnexion(): Promise<void> {
-        while (!this.connection) {
-            try {
-                this.logger.info('[AMQP] Connecting...');
+    public async disconnect(): Promise<void> {
+        this.state = 'disconnecting';
 
-                const env = this.option?.clientProperties?.env ?? process.env.NODE_ENV;
-                const conn = await connect(this.config, {
-                    clientProperties: {
-                        ...(this.option?.clientProperties?.extras ?? {}),
-                        connection_name: `${this.option?.clientProperties?.service ?? process.env.SERVICE_NAME ?? 'service'}${env ? `:${env}` : ''}:${process.pid}`,
-                        service: this.option?.clientProperties?.service ?? process.env.SERVICE_NAME,
-                        env,
-                        hostname: hostname(),
-                    },
-                });
-                this.connection = conn;
-                this.isConnected = true;
-                this.bindConnectionEvents(conn);
-                this.logger.info('[AMQP] Successful connection');
-                await Promise.all(this.brokers.map((b) => b.start()));
-                this.emit('connected', conn);
+        const conn = this.connection;
+        this.connection = null;
+
+        if (conn) {
+            try {
+                await conn.close();
             } catch (err) {
-                this.isConnected = false;
-                const error = err instanceof Error ? err : new Error(String(err));
-                this.logger.error({ err: error }, '[AMQP] Connection failed');
-                this.emit('error', error);
-                if (!this.isDisconnected) {
-                    this.logger.warn(`[AMQP] New connection attempt in ${this.timeout} ms`);
-                    this.emit('reconnecting');
-                    await this.delay(this.timeout);
-                }
+                this.logger.error({ err }, '[AMQP] Error while closing connection');
             }
         }
+
+        this.state = 'disconnected';
+        this.emit('disconnected');
+    }
+
+    private async connectLoop(): Promise<void> {
+        while (this.state !== 'disconnecting' && this.state !== 'disconnected') {
+            try {
+                this.state = this.reconnectAttempt === 0 ? 'connecting' : 'reconnecting';
+
+                this.logger.info({ connection: this.name }, '[AMQP] Connecting');
+
+                const conn = await this.openConnection();
+
+                this.connection = conn;
+                this.state = 'connected';
+                this.reconnectAttempt = 0;
+
+                this.bindConnectionEvents(conn);
+
+                this.logger.info({ connection: this.name }, '[AMQP] Connected');
+                this.emit('connected', conn);
+
+                return;
+            } catch (err) {
+                const error = err instanceof Error ? err : new Error(String(err));
+
+                this.connection = null;
+                this.state = 'reconnecting';
+                this.reconnectAttempt += 1;
+
+                this.logger.error({ err: error, connection: this.name, attempt: this.reconnectAttempt }, '[AMQP] Connection failed');
+
+                this.emitSafe('connection_error', error);
+
+                const wait = reconnectDelayWithJitter(this.reconnectDelayMs, this.reconnectAttempt);
+
+                this.logger.warn({ connection: this.name, wait }, '[AMQP] Reconnecting later');
+
+                await delay(wait);
+            }
+        }
+    }
+
+    private async openConnection(): Promise<ChannelModel> {
+        const clientProperties = this.buildClientProperties();
+
+        if ('url' in this.config.connection) {
+            return connect(this.config.connection.url, {
+                ...(this.config.connection.socketOptions as object | undefined),
+                clientProperties,
+            });
+        }
+
+        return connect(this.config.connection.options, {
+            ...(this.config.connection.socketOptions as object | undefined),
+            clientProperties,
+        });
     }
 
     private bindConnectionEvents(conn: ChannelModel): void {
         conn.on('error', (err: Error) => {
             if (err.message !== 'Connection closing') {
-                this.logger.error({ err }, '[AMQP] Connection error');
+                this.logger.error({ err, connection: this.name }, '[AMQP] Connection error');
             }
-            this.emit('error', err);
+
+            this.emitSafe('connection_error', err);
         });
+
         conn.on('blocked', (reason: string) => {
-            this.logger.warn({ reason }, '[AMQP] Connection blocked');
+            this.logger.warn({ reason, connection: this.name }, '[AMQP] Connection blocked');
             this.emit('blocked', reason);
         });
+
         conn.on('unblocked', () => {
-            this.logger.warn('[AMQP] Connection unblocked');
+            this.logger.warn({ connection: this.name }, '[AMQP] Connection unblocked');
             this.emit('unblocked');
         });
-        conn.once('close', async (err?: Error) => {
-            this.emit('disconnected', err);
-            this.connection = null;
-            this.isConnected = false;
-            if (!this.isDisconnected) {
-                this.logger.warn({ err }, '[AMQP] Connection has been closed');
-                this.logger.warn('[AMQP] Restarting connection to RabbitMQ');
-                this.emit('reconnecting');
-                await this.createConnexion();
+
+        conn.once('close', () => {
+            if (this.connection === conn) {
+                this.connection = null;
             }
+
+            if (this.state === 'disconnecting' || this.state === 'disconnected') {
+                return;
+            }
+
+            this.state = 'reconnecting';
+
+            this.logger.warn({ connection: this.name }, '[AMQP] Connection closed');
+            this.emit('disconnected');
+
+            void this.connect();
         });
     }
 
-    public async disconnect(): Promise<void> {
-        this.isDisconnected = true;
-        this.isConnected = false;
-        if (this.connection) {
-            await Promise.all(this.brokers.map((b) => b.disconnect()));
-            await this.connection.close();
+    private buildClientProperties(): Record<string, string | undefined> {
+        const env = this.config.clientProperties?.env ?? process.env.NODE_ENV;
+        const service = this.config.clientProperties?.service ?? process.env.SERVICE_NAME ?? 'service';
+
+        return {
+            ...(this.config.clientProperties?.extras ?? {}),
+            connection_name: `${service}${env ? `:${env}` : ''}@${hostname()}:${process.pid}`,
+            service,
+            env,
+            hostname: hostname(),
+        };
+    }
+
+    private emitSafe(event: string, payload?: unknown): void {
+        if (this.listenerCount(event) > 0) {
+            this.emit(event, payload);
         }
-    }
-
-    private delay(milliseconds: number): Promise<void> {
-        return new Promise((resolve) => {
-            setTimeout(resolve, milliseconds);
-        });
     }
 }
