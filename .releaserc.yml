@@ -10,6 +10,9 @@ branches:
   - name: "release/1.x"
     range: "1.x"
     prerelease: false
+  - name: "release/2.x"
+    range: "2.x"
+    prerelease: false
 
 
 plugins:
