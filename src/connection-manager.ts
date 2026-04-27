@@ -48,7 +48,9 @@ export class ConnectionManager extends EventEmitter {
 
         const manager = new ConnectionManager(name, config);
         await manager.connect();
-        manager.enableGracefulShutdown();
+        if (config.enableGracefulShutdown !== false) {
+            manager.enableGracefulShutdown();
+        }
 
         return manager;
     }
@@ -96,6 +98,7 @@ export class ConnectionManager extends EventEmitter {
     public enableGracefulShutdown() {
         const shutdown = async () => {
             await this.disconnect();
+            process.exit(0);
         };
 
         process.once('SIGINT', shutdown);

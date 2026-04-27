@@ -22,6 +22,7 @@ export interface ConnectionManagerConfig {
     reconnectDelayMs?: number;
     logger?: Logger;
     clientProperties?: ConnectionClientProperties;
+    enableGracefulShutdown?: boolean;
 }
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnecting' | 'disconnected';
