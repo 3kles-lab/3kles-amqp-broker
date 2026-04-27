@@ -39,7 +39,6 @@ export class ConnectionManager extends EventEmitter {
         const connectionManager = new ConnectionManager(config ?? undefined, option ?? undefined, timeout ?? undefined);
         ConnectionManager.connections[index] = connectionManager;
         await ConnectionManager.connections[index].createConnexion();
-
         return connectionManager;
     }
 
