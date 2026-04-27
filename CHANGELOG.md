@@ -1,3 +1,10 @@
+## [3.0.2](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.0.1...v3.0.2) (2026-04-27)
+
+
+### Bug Fixes
+
+* add control on close channel ([2575943](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/commit/2575943324c9110cf52309effe2b16834512f105))
+
 ## [3.0.1](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.0.0...v3.0.1) (2026-04-27)
 
 
