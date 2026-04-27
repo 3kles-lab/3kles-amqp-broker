@@ -1,3 +1,10 @@
+## [2.2.2](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v2.2.1...v2.2.2) (2026-04-27)
+
+
+### Bug Fixes
+
+* clear code ([43cd205](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/commit/43cd20506c3f925ae87678a442a17908a45e6765))
+
 ## [2.2.1](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v2.2.0...v2.2.1) (2026-04-27)
 
 
