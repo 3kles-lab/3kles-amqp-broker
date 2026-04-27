@@ -383,7 +383,9 @@ export class MessageBroker extends EventEmitter {
             return;
         }
 
-        if (consumer.state === 'active' && consumer.consumerTag) {
+        const canCancelOnRabbit = consumer.state === 'active' && !!consumer.consumerTag && !!this.channel && this.state === 'started';
+
+        if (canCancelOnRabbit && consumer.consumerTag) {
             try {
                 await this.currentChannel.cancel(consumer.consumerTag);
             } catch (err) {

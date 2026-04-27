@@ -7,6 +7,7 @@ import { err as errSerializer } from 'pino-std-serializers';
 import { ConnectionManagerConfig, ConnectionState } from './types/connection';
 import { delay, reconnectDelayWithJitter } from './utils/delay';
 import { AmqpConnectionError } from './errors';
+import { MessageBroker } from './message-broker';
 
 const defaultLogger = pino({
     level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
@@ -28,14 +29,13 @@ const defaultLogger = pino({
 });
 
 export class ConnectionManager extends EventEmitter {
-    private static readonly instances = new Map<string | number, Promise<ConnectionManager>>();
+    private static readonly instances = new Map<string | number, ConnectionManager>();
 
-    public static get(name: string | number, config: ConnectionManagerConfig): Promise<ConnectionManager> {
+    public static async get(name: string | number, config: ConnectionManagerConfig): Promise<ConnectionManager> {
         let instance = this.instances.get(name);
 
         if (!instance) {
-            instance = this.create(name, config);
-            this.instances.set(name, instance);
+            instance = await this.create(name, config);
         }
 
         return instance;
@@ -47,6 +47,7 @@ export class ConnectionManager extends EventEmitter {
         }
 
         const manager = new ConnectionManager(name, config);
+        this.instances.set(name, manager);
         await manager.connect();
         if (config.enableGracefulShutdown !== false) {
             manager.enableGracefulShutdown();
@@ -61,7 +62,7 @@ export class ConnectionManager extends EventEmitter {
         await Promise.all(managers.map((manager) => manager.disconnect()));
     }
 
-    private connection: ChannelModel | null = null;
+    public connection: ChannelModel | null = null;
     private state: ConnectionState = 'idle';
     private connectPromise?: Promise<void>;
     private reconnectAttempt = 0;
@@ -98,7 +99,7 @@ export class ConnectionManager extends EventEmitter {
     public enableGracefulShutdown() {
         const shutdown = async () => {
             await this.disconnect();
-            process.exit(0);
+            process.exit();
         };
 
         process.once('SIGINT', shutdown);
