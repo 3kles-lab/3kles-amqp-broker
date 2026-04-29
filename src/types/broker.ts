@@ -16,9 +16,8 @@ export interface BrokerConfig {
     connectionManager: ConnectionManager;
     prefetch?: number;
     logger?: Logger;
-
     rpc?: BrokerRpcConfig;
-
+    confirm?: boolean;
     consumers?: BrokerConsumerConfig;
 }
 

@@ -1,4 +1,4 @@
-import { Channel, ConsumeMessage, Options, Replies } from 'amqplib';
+import { Channel, ConfirmChannel, ConsumeMessage, Options, Replies } from 'amqplib';
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import pino, { Logger } from 'pino';
@@ -53,7 +53,7 @@ export class MessageBroker extends EventEmitter {
         return broker;
     }
 
-    private channel: Channel | null = null;
+    private channel: Channel | ConfirmChannel | null = null;
     private state: BrokerState = 'idle';
     private startPromise?: Promise<void>;
 
@@ -98,7 +98,7 @@ export class MessageBroker extends EventEmitter {
         return this.state === 'started' && !!this.channel;
     }
 
-    public get currentChannel(): Channel {
+    public get currentChannel(): Channel | ConfirmChannel {
         if (!this.channel || this.state !== 'started') {
             throw new AmqpError('[AMQP] Broker channel is not ready');
         }
@@ -106,7 +106,7 @@ export class MessageBroker extends EventEmitter {
         return this.channel;
     }
 
-    private getChannel(): Channel {
+    private getChannel(): Channel | ConfirmChannel {
         if (!this.channel) {
             throw new AmqpError('[AMQP] Broker channel is not ready');
         }
@@ -146,7 +146,13 @@ export class MessageBroker extends EventEmitter {
             } catch {}
         }
 
-        const channel = await this.connectionManager.currentConnection.createChannel();
+        let channel: Channel | ConfirmChannel;
+
+        if (this.config.confirm) {
+            channel = await this.connectionManager.currentConnection.createConfirmChannel();
+        } else {
+            channel = await this.connectionManager.currentConnection.createChannel();
+        }
 
         channel.on('error', (err) => {
             this.logger.error({ err, broker: this.name }, '[AMQP] Channel error');
@@ -296,7 +302,19 @@ export class MessageBroker extends EventEmitter {
     public async publish(exchange: string, routingKey: string, payload: PublishPayload, options?: Options.Publish): Promise<boolean> {
         const buffer = toBuffer(payload);
 
-        return this.currentChannel.publish(exchange, routingKey, buffer, buildPublishOptions(payload, options));
+        if (this.config.confirm) {
+            return new Promise<boolean>((resolve, reject) => {
+                this.currentChannel.publish(exchange, routingKey, buffer, buildPublishOptions(payload, options), (err) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+                    resolve(true);
+                });
+            });
+        } else {
+            return this.currentChannel.publish(exchange, routingKey, buffer, buildPublishOptions(payload, options));
+        }
     }
 
     public async publishInput(input: PublishInput): Promise<boolean> {
@@ -314,7 +332,19 @@ export class MessageBroker extends EventEmitter {
     public async sendToQueue(queue: string, payload: PublishPayload, options?: Options.Publish): Promise<boolean> {
         const buffer = toBuffer(payload);
 
-        return this.currentChannel.sendToQueue(queue, buffer, buildPublishOptions(payload, options));
+        if (this.config.confirm) {
+            return new Promise<boolean>((resolve, reject) => {
+                this.currentChannel.sendToQueue(queue, buffer, buildPublishOptions(payload, options), (err) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+                    resolve(true);
+                });
+            });
+        } else {
+            return this.currentChannel.sendToQueue(queue, buffer, buildPublishOptions(payload, options));
+        }
     }
 
     public async sendToQueueInput(input: SendToQueueInput): Promise<boolean> {
@@ -439,7 +469,7 @@ export class MessageBroker extends EventEmitter {
             this.logger.error({ err, consumerId: consumer.id, queue: consumer.queue }, '[AMQP] Message handler failed');
 
             if (!ctx.settled && consumer.options?.noAck !== true) {
-                const requeue = this.config.consumers?.requeueOnHandlerError ?? true;
+                const requeue = this.config.consumers?.requeueOnHandlerError ?? false;
                 this.getChannel().nack(msg, false, requeue);
             }
 
@@ -486,7 +516,7 @@ export class MessageBroker extends EventEmitter {
                 }
 
                 settled = true;
-                this.getChannel().nack(msg, allUpTo, requeue);
+                this.getChannel().nack(msg, allUpTo ?? false, requeue ?? false);
             },
 
             reject: (requeue?: boolean) => {
