@@ -1,3 +1,10 @@
+# [3.1.0](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.0.2...v3.1.0) (2026-04-29)
+
+
+### Features
+
+* add confirm broker config to create confirmChannel ([de6f45e](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/commit/de6f45e168966ef1b3d9777eae64e0c8b76c2eb5))
+
 ## [3.0.2](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.0.1...v3.0.2) (2026-04-27)
 
 
