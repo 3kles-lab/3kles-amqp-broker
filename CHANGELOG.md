@@ -1,3 +1,10 @@
+# [3.2.0](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.1.0...v3.2.0) (2026-08-10)
+
+
+### Features
+
+* add messaging consumer producer definition ([4cdcbd4](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/commit/4cdcbd4263d20928f2801d4b6f1bdaea5ee40277))
+
 # [3.1.0](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.0.2...v3.1.0) (2026-04-29)
 
 
