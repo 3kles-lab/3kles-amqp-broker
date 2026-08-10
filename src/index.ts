@@ -17,3 +17,16 @@ export * from './utils/keys';
 export * from './utils/message';
 
 export * from './enum/priority.enum';
+
+export * from './messaging/consumer/consumer.abstract';
+export * from './messaging/consumer/consumer.interface';
+export * from './messaging/consumer/queue.consumer';
+export * from './messaging/errors/non-retryable.error';
+export * from './messaging/errors/retryable.error';
+export * from './messaging/handler/handler.interface';
+export * from './messaging/logger/logger.interface';
+export * from './messaging/producer/producer.interface';
+export * from './messaging/publisher/publisher.interface';
+export * from './messaging/publisher/publisher';
+export * from './messaging/topology/topology-registry';
+export * from './messaging/topology/topology.interface';
