@@ -1,3 +1,10 @@
+# [3.3.0](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.2.0...v3.3.0) (2026-10-05)
+
+
+### Features
+
+* handle routing returns and publication timeouts in confirm mode ([4f93788](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/commit/4f93788b4432abd05ae03a2fc7b079561de0015c))
+
 # [3.2.0](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.1.0...v3.2.0) (2026-08-10)
 
 
