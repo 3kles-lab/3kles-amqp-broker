@@ -18,6 +18,8 @@ export interface BrokerConfig {
     logger?: Logger;
     rpc?: BrokerRpcConfig;
     confirm?: boolean;
+    /** Maximum wait for a routed publisher confirmation (default: 10,000 ms). */
+    publishTimeoutMs?: number;
     consumers?: BrokerConsumerConfig;
 }
 

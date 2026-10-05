@@ -2,6 +2,49 @@
 
 This package contains interface and class to manage AMQP Broker
 
+## Confirmed publications
+
+Enable `confirm` on the broker to wait for RabbitMQ's confirmation and detect
+messages that cannot be routed, without changing publication calls:
+
+```ts
+const broker = await MessageBroker.get('default', {
+    connectionManager,
+    confirm: true,
+    publishTimeoutMs: 10_000, // Optional; defaults to 10 seconds.
+});
+
+await broker.publish('orders.exchange', 'orders.created', payload, {
+    persistent: true,
+    messageId: eventId,
+});
+await broker.sendToQueue('orders.queue', payload);
+```
+
+This also applies to `publishInput`, `sendToQueueInput`, and `Publisher`.
+In confirm mode these methods always publish with `mandatory: true`, even if
+the caller supplies `mandatory: false`. Their `Promise<boolean>` resolves with
+`true` only after a positive confirmation without a routing return. It rejects with:
+
+- `AmqpUnroutableError`: RabbitMQ returned the message. Includes `replyCode`,
+  `replyText`, `exchange`, `routingKey`, and the caller's `messageId`, if supplied.
+- `AmqpPublishError`: negative confirmation or synchronous channel publication failure.
+- `AmqpPublishUnknownError`: confirmation timed out (`reason: 'timeout'`) or the
+  channel closed before confirmation (`reason: 'channel_closed'`). The message
+  may already have been accepted. A retry can produce duplicates; no automatic
+  retry is performed.
+
+The two specialized errors extend `AmqpPublishError`. The broker preserves the
+caller's `messageId` and headers, reserving `x-3kles-publication-id` for a unique
+identifier per publication attempt. Consumers should use a stable business
+identifier for deduplication when retrying an uncertain publication.
+
+Confirmation does not mean the consumer has processed the message. Persistence
+also requires persistent messages and appropriate durable queue configuration.
+With `confirm: false`, the existing boolean buffer/backpressure result is preserved.
+Direct calls through `currentChannel` and the RPC methods do not use this
+publication tracking.
+
 ## Enums
 
 **KlesPriority**:

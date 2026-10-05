@@ -1,11 +1,11 @@
-import { Channel, ConfirmChannel, ConsumeMessage, Options, Replies } from 'amqplib';
+import { Channel, ConfirmChannel, ConsumeMessage, Message, Options, Replies } from 'amqplib';
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import pino, { Logger } from 'pino';
 
 import { ConnectionManager } from './connection-manager';
 import { ConsumerHandle } from './consumer-handle';
-import { AmqpConsumerError, AmqpError, AmqpRpcTimeoutError } from './errors';
+import { AmqpConsumerError, AmqpError, AmqpPublishError, AmqpPublishUnknownError, AmqpRpcTimeoutError, AmqpUnroutableError } from './errors';
 
 import { AssertExchangeInput, ExchangeDeclaration, ExchangeType } from './types/exchange';
 
@@ -21,6 +21,13 @@ import { PendingRpcRequest, RpcContext, RpcHandler, RpcRequestExchangeInput, Rpc
 
 import { bindingKey } from './utils/keys';
 import { buildPublishOptions, parseJson, toBuffer } from './utils/message';
+
+const publicationIdHeader = 'x-3kles-publication-id';
+
+interface PendingPublication {
+    messageId?: string;
+    fail: (error: Error) => void;
+}
 
 const defaultLogger = pino({
     level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
@@ -68,12 +75,18 @@ export class MessageBroker extends EventEmitter {
     private rpcReplyQueue?: Replies.AssertQueue;
     private rpcConsumerTag?: string;
     private readonly pendingRpc = new Map<string, PendingRpcRequest>();
+    private readonly pendingPublications = new WeakMap<ConfirmChannel, Map<string, PendingPublication>>();
 
     private constructor(
         public readonly name: string | number,
         private readonly config: BrokerConfig,
     ) {
         super();
+
+        const publishTimeoutMs = config.publishTimeoutMs ?? 10_000;
+        if (!Number.isInteger(publishTimeoutMs) || publishTimeoutMs <= 0 || publishTimeoutMs > 2_147_483_647) {
+            throw new AmqpError('[AMQP] publishTimeoutMs must be a positive integer no greater than 2147483647');
+        }
 
         this.connectionManager = config.connectionManager;
         this.logger = config.logger ?? defaultLogger;
@@ -303,15 +316,7 @@ export class MessageBroker extends EventEmitter {
         const buffer = toBuffer(payload);
 
         if (this.config.confirm) {
-            return new Promise<boolean>((resolve, reject) => {
-                this.currentChannel.publish(exchange, routingKey, buffer, buildPublishOptions(payload, options), (err) => {
-                    if (err) {
-                        reject(err);
-                        return;
-                    }
-                    resolve(true);
-                });
-            });
+            return this.publishWithConfirmation(exchange, routingKey, buffer, buildPublishOptions(payload, options));
         } else {
             return this.currentChannel.publish(exchange, routingKey, buffer, buildPublishOptions(payload, options));
         }
@@ -333,18 +338,83 @@ export class MessageBroker extends EventEmitter {
         const buffer = toBuffer(payload);
 
         if (this.config.confirm) {
-            return new Promise<boolean>((resolve, reject) => {
-                this.currentChannel.sendToQueue(queue, buffer, buildPublishOptions(payload, options), (err) => {
-                    if (err) {
-                        reject(err);
-                        return;
-                    }
-                    resolve(true);
-                });
-            });
+            return this.publishWithConfirmation('', queue, buffer, buildPublishOptions(payload, options));
         } else {
             return this.currentChannel.sendToQueue(queue, buffer, buildPublishOptions(payload, options));
         }
+    }
+
+    private publishWithConfirmation(exchange: string, routingKey: string, buffer: Buffer, options: Options.Publish): Promise<boolean> {
+        const channel = this.currentChannel as ConfirmChannel;
+        const pending = this.trackPublications(channel);
+        const publicationId = uuidv4();
+
+        return new Promise<boolean>((resolve, reject) => {
+            const finish = (error?: Error) => {
+                if (!pending.delete(publicationId)) {
+                    return;
+                }
+                clearTimeout(timeout);
+                if (error) {
+                    reject(error);
+                } else {
+                    resolve(true);
+                }
+            };
+            const timeout = setTimeout(() => {
+                finish(new AmqpPublishUnknownError('timeout', options.messageId));
+            }, this.config.publishTimeoutMs ?? 10_000);
+
+            pending.set(publicationId, { messageId: options.messageId, fail: finish });
+
+            try {
+                channel.publish(exchange, routingKey, buffer, {
+                    ...options,
+                    mandatory: true,
+                    headers: { ...options.headers, [publicationIdHeader]: publicationId },
+                }, (err) => {
+                    finish(err ? new AmqpPublishError('[AMQP] Publication was not confirmed', err) : undefined);
+                });
+            } catch (err) {
+                finish(new AmqpPublishError('[AMQP] Publication failed', err));
+            }
+        });
+    }
+
+    private trackPublications(channel: ConfirmChannel): Map<string, PendingPublication> {
+        const existing = this.pendingPublications.get(channel);
+        if (existing) {
+            return existing;
+        }
+
+        const pending = new Map<string, PendingPublication>();
+        this.pendingPublications.set(channel, pending);
+
+        const onReturn = (message: Message & { fields: { replyCode: number; replyText: string } }) => {
+            const publicationId = message.properties.headers?.[publicationIdHeader];
+            const publication = pending.get(publicationId);
+            if (publication) {
+                publication.fail(new AmqpUnroutableError(
+                    message.fields.replyCode,
+                    message.fields.replyText,
+                    message.fields.exchange,
+                    message.fields.routingKey,
+                    publication.messageId,
+                ));
+            }
+        };
+
+        channel.on('return', onReturn);
+        // Run before amqplib rejects outstanding confirm callbacks on close.
+        channel.prependOnceListener('close', () => {
+            for (const publication of pending.values()) {
+                publication.fail(new AmqpPublishUnknownError('channel_closed', publication.messageId));
+            }
+            channel.removeListener('return', onReturn);
+            this.pendingPublications.delete(channel);
+        });
+
+        return pending;
     }
 
     public async sendToQueueInput(input: SendToQueueInput): Promise<boolean> {

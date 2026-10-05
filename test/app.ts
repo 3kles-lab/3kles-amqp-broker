@@ -2,20 +2,73 @@ import { ConnectionManager } from '../src/connection-manager';
 import { MessageBroker } from '../src/message-broker';
 import { connectionManagerConfigFromEnv } from '../src/env';
 import { KlesDefaultMaxPriority, KlesPriority } from '../src/enum/priority.enum';
+import { ConsumerHandle } from '../src/consumer-handle';
 
 // tslint:disable-next-line: no-floating-promises
+
+let connectionManager: ConnectionManager;
+let toto: ConsumerHandle;
+
+let broker: MessageBroker;
+
+process.once('SIGINT', async () => {
+    console.log('ici1');
+    // await toto?.close()
+
+    
+    const response = await broker?.publish(
+        'orders.exchange',
+        'orders.created',
+        {
+            orderId: 'order_123',
+            userId: 'user_456',
+            amount: 99.9,
+        },
+        {
+            persistent: true,
+        },
+    );
+
+    console.log('publis');
+
+    console.log('response', response);
+
+    await connectionManager?.disconnect();
+    process.exit(0);
+});
+
+process.once('SIGTERM', async () => {
+    console.log('ici2');
+    await connectionManager?.disconnect();
+    process.exit(0);
+});
+
+process.once('SIGTERM', async () => {
+    console.log('ici3');
+    await connectionManager?.disconnect();
+    process.exit(0);
+});
+
 try {
     (async () => {
         process.env.RABBITMQ_USERNAME = 'guest';
         process.env.RABBITMQ_PASSWORD = 'guest';
-        process.env.RABBITMQ_HOST = 'localhost';
+        process.env.RABBITMQ_HOST = '192.168.111.63';
         process.env.RABBITMQ_PROTOCOL = 'amqp';
         process.env.RABBITMQ_PORT = '5672';
 
-        const connection = await ConnectionManager.get('main', connectionManagerConfigFromEnv());
+        connectionManager = await ConnectionManager.create(0, {
+            ...connectionManagerConfigFromEnv(),
+            enableGracefulShutdown: false,
+        });
 
-        const broker = await MessageBroker.get('default', {
-            connectionManager: connection,
+        await connectionManager.onDisconnected(() => {
+            // toto.close();
+        });
+
+        broker = await MessageBroker.get('default', {
+            connectionManager: connectionManager,
+            confirm: true,
             prefetch: Number(process.env.RABBITMQ_PREFETCH) || 10,
         });
 
@@ -40,34 +93,40 @@ try {
             queue: queue.queue,
             routingKey: 'orders.created',
         });
+        // toto = await broker.consumeQueue(queue.queue, async (msg, ctx) => {
 
-        await broker.publish(
-            'orders.exchange',
-            'orders.created',
-            {
-                orderId: 'order_123',
-                userId: 'user_456',
-                amount: 99.9,
-            },
-            {
-                persistent: true,
-            },
-        );
+        //     try {
 
-        await broker.consumeQueue(queue.queue, async (msg, ctx) => {
-            const payload = ctx.json<any>();
+        //           const payload = ctx.json<any>();
 
-            console.log('Received order:', payload);
+        //     console.log('Received order:', payload);
+        //         // traitement métier
 
-            try {
-                // traitement métier
+        //         ctx.ack();
+        //     } catch (err) {
+        //         console.error('Failed to process order', err);
+        //         ctx.nack(false, false);
+        //     }
+        // });
 
-                ctx.ack();
-            } catch (err) {
-                console.error('Failed to process order', err);
-                ctx.nack();
-            }
-        });
+        // setInterval(async () => {
+        //     try {
+        //         await broker.publish(
+        //             'orders.exchange',
+        //             'orders.created',
+        //             {
+        //                 orderId: 'order_123',
+        //                 userId: 'user_456',
+        //                 amount: 99.9,
+        //             },
+        //             {
+        //                 persistent: true,
+        //             },
+        //         );
+        //     } catch (err) {
+        //         console.error(err);
+        //     }
+        // }, 500);
     })();
 } catch (err) {
     console.log(err);
