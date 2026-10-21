@@ -1,4 +1,5 @@
 import { Options } from 'amqplib';
+import { readFileSync } from 'fs';
 import { AmqpConnectionConfig, ConnectionManagerConfig } from './types/connection';
 
 export type RabbitMqEnv = NodeJS.ProcessEnv & {
@@ -10,14 +11,20 @@ export type RabbitMqEnv = NodeJS.ProcessEnv & {
     RABBITMQ_PORT?: string;
     RABBITMQ_TIMEOUT?: string;
     RABBITMQ_PREFETCH?: string;
+    RABBITMQ_VHOST?: string;
+    RABBITMQ_CA_FILE?: string;
     SERVICE_NAME?: string;
     NODE_ENV?: string;
 };
 
 export function connectionConfigFromEnv(env: RabbitMqEnv = process.env): AmqpConnectionConfig {
+    const socketOptions = env.RABBITMQ_CA_FILE
+        ? { ca: readFileSync(env.RABBITMQ_CA_FILE), rejectUnauthorized: true }
+        : undefined;
     if (env.RABBITMQ_URL) {
         return {
             url: env.RABBITMQ_URL,
+            socketOptions,
         };
     }
 
@@ -26,11 +33,13 @@ export function connectionConfigFromEnv(env: RabbitMqEnv = process.env): AmqpCon
         protocol: env.RABBITMQ_PROTOCOL ?? 'amqp',
         username: env.RABBITMQ_USERNAME,
         password: env.RABBITMQ_PASSWORD,
-        port: Number(env.RABBITMQ_PORT) || 5672,
+        port: Number(env.RABBITMQ_PORT) || (env.RABBITMQ_PROTOCOL === 'amqps' ? 5671 : 5672),
+        vhost: env.RABBITMQ_VHOST ?? '/',
     };
 
     return {
         options,
+        socketOptions,
     };
 }
 
