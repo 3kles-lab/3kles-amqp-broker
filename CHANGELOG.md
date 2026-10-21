@@ -1,3 +1,10 @@
+## [3.3.1](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.3.0...v3.3.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* support verified AMQPS and application vhosts ([4e319b4](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/commit/4e319b4b795549498ca8686ed3848281233a9151))
+
 # [3.3.0](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.2.0...v3.3.0) (2026-10-05)
 
 
