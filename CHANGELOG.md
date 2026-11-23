@@ -1,3 +1,10 @@
+# [3.4.0](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.3.2...v3.4.0) (2026-11-23)
+
+
+### Features
+
+* stop reconnecting after RabbitMQ force close ([1669ec2](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/commit/1669ec2849ad01f9940a23e034a74aa49e7e75b5))
+
 ## [3.3.2](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.3.1...v3.3.2) (2026-11-23)
 
 
