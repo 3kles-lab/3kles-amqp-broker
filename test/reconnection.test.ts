@@ -120,11 +120,11 @@ class FakeConnection extends EventEmitter {
 
     close = jest.fn(async () => { this.drop(); });
 
-    drop(): void {
+    drop(error?: Error): void {
         for (const channel of this.openedChannels) {
             void channel.close();
         }
-        this.emit('close');
+        this.emit('close', error);
     }
 }
 
@@ -176,6 +176,53 @@ function delivery(body: string, replyTo?: string): ConsumeMessage {
 }
 
 beforeEach(() => jest.clearAllMocks());
+
+test.each(['Closed via management plugin', 'Test UI - fermeture volontaire du service AMQP'])(
+    'stays disconnected after an administrative close with reason "%s"',
+    async (replyText) => {
+        const initial = new FakeConnection([new FakeChannel('first')]);
+        const replacement = new FakeConnection([new FakeChannel('second')]);
+        const { broker, connectionManager } = await setup([initial, replacement]);
+        const reason = `Connection closed: 320 (CONNECTION-FORCED) with message "CONNECTION_FORCED - ${replyText}"`;
+        const error = Object.assign(new Error(reason), { code: 320 });
+        const disconnected = once(broker, 'disconnected');
+
+        initial.drop(error);
+        await disconnected;
+
+        expect(connect).toHaveBeenCalledTimes(1);
+        expect(connectionManager.currentState).toBe('disconnected');
+        expect(broker.started).toBe(false);
+        expect(logger.warn).toHaveBeenCalledWith(
+            { connection: connectionManager.name, reason, code: 320, reconnect: false },
+            '[AMQP] Connection closed',
+        );
+    },
+);
+
+test.each(["broker forced connection closure with reason 'shutdown'", 'Node was put into maintenance mode'])(
+    'logs the broker close reason "%s" and reconnects',
+    async (replyText) => {
+        const initial = new FakeConnection([new FakeChannel('first')]);
+        const replacement = new FakeConnection([new FakeChannel('second')]);
+        const { broker, connectionManager } = await setup([initial, replacement]);
+        const reason = `Connection closed: 320 (CONNECTION-FORCED) with message "CONNECTION_FORCED - ${replyText}"`;
+        const error = Object.assign(new Error(reason), { code: 320 });
+        const recovered = once(broker, 'started');
+        logger.warn.mockClear();
+
+        initial.drop(error);
+        await recovered;
+
+        expect(logger.warn).toHaveBeenNthCalledWith(
+            1,
+            { connection: connectionManager.name, reason, code: 320, reconnect: true },
+            '[AMQP] Connection closed',
+        );
+        expect(logger.warn.mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(connect).mock.invocationCallOrder[1]);
+        expect(connectionManager.currentConnection).toBe(replacement);
+    },
+);
 
 test('restores distinct generated queues and keeps bindings and consumer handles usable across reconnects', async () => {
     const first = new FakeChannel('first');

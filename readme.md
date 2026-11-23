@@ -96,6 +96,8 @@ publication tracking.
 - **delay**: Delay timeout before recreate connection if connection failed 
 - **getConnections**: List all connections from index and create if not exist
 
+RabbitMQ's **Force Close** leaves the connection manager disconnected. Restart the service to open a new connection. Automatic reconnection still handles network failures and RabbitMQ's standard shutdown and maintenance reasons.
+
 
 **Consumer** is a class to create AMQP consumer from MessageBroker:
 - **constructor**: broker:MessageBroker, consumerTag:string, key:string, handler:string

@@ -9,6 +9,9 @@ import { ConnectionManagerConfig, ConnectionState } from './types/connection';
 import { reconnectDelayWithJitter } from './utils/delay';
 import { AmqpConnectionError } from './errors';
 
+const connectionForcedCode = 320;
+const forcedCloseReplyPrefix = `Connection closed: ${connectionForcedCode} (CONNECTION-FORCED) with message "CONNECTION_FORCED - `;
+
 const defaultLogger = pino({
     level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
     timestamp: pino.stdTimeFunctions.isoTime,
@@ -27,6 +30,12 @@ const defaultLogger = pino({
         },
     },
 });
+
+function isRecoverableForcedClose(message: string): boolean {
+    // RabbitMQ also uses CONNECTION_FORCED when a node stops or enters maintenance.
+    return message.startsWith(`${forcedCloseReplyPrefix}broker forced connection closure with reason '`)
+        || message === `${forcedCloseReplyPrefix}Node was put into maintenance mode"`;
+}
 
 export class ConnectionManager extends EventEmitter {
     private static readonly instances = new Map<string | number, ConnectionManager>();
@@ -256,18 +265,20 @@ export class ConnectionManager extends EventEmitter {
             this.emit('unblocked');
         });
 
-        conn.once('close', () => {
-            if (this.connection === conn) {
-                this.connection = null;
+        conn.once('close', (err?: Error & { code?: number | string }) => {
+            if (this.connection !== conn) {
+                return;
             }
+            this.connection = null;
 
-            if (this.state === 'disconnecting' || this.state === 'disconnected') {
+            const reconnect = err?.code !== connectionForcedCode || isRecoverableForcedClose(err.message);
+            this.logger.warn({ connection: this.name, reason: err?.message, code: err?.code, reconnect }, '[AMQP] Connection closed');
+            if (!reconnect) {
+                void this.disconnect();
                 return;
             }
 
             this.state = 'reconnecting';
-
-            this.logger.warn({ connection: this.name }, '[AMQP] Connection closed');
             this.emit('disconnected');
 
             void this.connect();
