@@ -1,3 +1,10 @@
+## [3.3.2](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.3.1...v3.3.2) (2026-11-23)
+
+
+### Bug Fixes
+
+* recreate binding with exclusive queue and minor bugs ([ac806c3](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/commit/ac806c381b148d14e94fafd699037819ac1a40f4))
+
 ## [3.3.1](http://gitlab.3kles.local/3kles/lib/corejs/3kles-amqp-broker/compare/v3.3.0...v3.3.1) (2026-10-21)
 
 
