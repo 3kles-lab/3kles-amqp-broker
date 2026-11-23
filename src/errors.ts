@@ -60,3 +60,13 @@ export class AmqpRpcTimeoutError extends AmqpError {
         this.name = 'AmqpRpcTimeoutError';
     }
 }
+
+/** The remote handler may have processed the request before the channel closed. */
+export class AmqpRpcUnknownError extends AmqpError {
+    public readonly reason = 'channel_closed';
+
+    constructor(public readonly correlationId: string) {
+        super('[AMQP] RPC outcome is unknown because the channel closed');
+        this.name = 'AmqpRpcUnknownError';
+    }
+}

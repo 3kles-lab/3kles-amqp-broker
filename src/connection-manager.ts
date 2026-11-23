@@ -1,13 +1,13 @@
 import { ChannelModel, connect } from 'amqplib';
 import { EventEmitter } from 'events';
+import { setTimeout as wait } from 'node:timers/promises';
 import { hostname } from 'os';
 import pino, { Logger } from 'pino';
 import { err as errSerializer } from 'pino-std-serializers';
 
 import { ConnectionManagerConfig, ConnectionState } from './types/connection';
-import { delay, reconnectDelayWithJitter } from './utils/delay';
+import { reconnectDelayWithJitter } from './utils/delay';
 import { AmqpConnectionError } from './errors';
-import { MessageBroker } from './message-broker';
 
 const defaultLogger = pino({
     level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
@@ -64,7 +64,7 @@ export class ConnectionManager extends EventEmitter {
 
     public connection: ChannelModel | null = null;
     private state: ConnectionState = 'idle';
-    private connectPromise?: Promise<void>;
+    private connectAttempt?: { controller: AbortController; promise: Promise<void> };
     private reconnectAttempt = 0;
 
     private readonly logger: Logger;
@@ -123,55 +123,63 @@ export class ConnectionManager extends EventEmitter {
     }
 
     public async connect(): Promise<void> {
-        if (this.connectPromise) {
-            return this.connectPromise;
+        if (this.connectAttempt) {
+            return this.connectAttempt.promise;
         }
 
-        this.connectPromise = this.connectLoop().finally(() => {
-            this.connectPromise = undefined;
-        });
+        if (this.state === 'disconnecting' || this.state === 'disconnected') {
+            return;
+        }
 
-        return this.connectPromise;
+        const controller = new AbortController();
+        const promise = this.connectLoop(controller.signal).finally(() => {
+            this.connectAttempt = undefined;
+        });
+        this.connectAttempt = { controller, promise };
+
+        return promise;
     }
 
     public async disconnect(): Promise<void> {
+        const wasConnected = this.connected;
         this.state = 'disconnecting';
+        // Established connections are closed with the AMQP handshake.
+        if (!wasConnected) {
+            this.connectAttempt?.controller.abort();
+        }
 
         const conn = this.connection;
         this.connection = null;
 
         if (conn) {
-            try {
-                await conn.close();
-            } catch (err) {
-                this.logger.error({ err }, '[AMQP] Error while closing connection');
-            }
+            await this.closeConnection(conn);
         }
 
         this.state = 'disconnected';
         this.emit('disconnected');
     }
 
-    private async connectLoop(): Promise<void> {
-        while (this.state !== 'disconnecting' && this.state !== 'disconnected') {
+    private async closeConnection(conn: ChannelModel): Promise<void> {
+        try {
+            await conn.close();
+        } catch (err) {
+            this.logger.error({ err }, '[AMQP] Error while closing connection');
+        }
+    }
+
+    private async connectLoop(signal: AbortSignal): Promise<void> {
+        while (!signal.aborted) {
+            this.state = this.reconnectAttempt === 0 ? 'connecting' : 'reconnecting';
+            this.logger.info({ connection: this.name }, '[AMQP] Connecting');
+
+            let conn: ChannelModel;
             try {
-                this.state = this.reconnectAttempt === 0 ? 'connecting' : 'reconnecting';
-
-                this.logger.info({ connection: this.name }, '[AMQP] Connecting');
-
-                const conn = await this.openConnection();
-
-                this.connection = conn;
-                this.state = 'connected';
-                this.reconnectAttempt = 0;
-
-                this.bindConnectionEvents(conn);
-
-                this.logger.info({ connection: this.name }, '[AMQP] Connected');
-                this.emit('connected', conn);
-
-                return;
+                conn = await this.openConnection(signal);
             } catch (err) {
+                if (signal.aborted) {
+                    return;
+                }
+
                 const error = err instanceof Error ? err : new Error(String(err));
 
                 this.connection = null;
@@ -182,28 +190,50 @@ export class ConnectionManager extends EventEmitter {
 
                 this.emitSafe('connection_error', error);
 
-                const wait = reconnectDelayWithJitter(this.reconnectDelayMs, this.reconnectAttempt);
+                const retryDelay = reconnectDelayWithJitter(this.reconnectDelayMs, this.reconnectAttempt);
+                this.logger.warn({ connection: this.name, wait: retryDelay }, '[AMQP] Reconnecting later');
 
-                this.logger.warn({ connection: this.name, wait }, '[AMQP] Reconnecting later');
-
-                await delay(wait);
+                try {
+                    await wait(retryDelay, undefined, { signal });
+                } catch (err) {
+                    if (signal.aborted) {
+                        return;
+                    }
+                    throw err;
+                }
+                continue;
             }
+
+            if (signal.aborted) {
+                conn.on('error', (err) => this.logger.error({ err }, '[AMQP] Error while closing cancelled connection'));
+                await this.closeConnection(conn);
+                return;
+            }
+
+            this.connection = conn;
+            this.state = 'connected';
+            this.reconnectAttempt = 0;
+
+            this.bindConnectionEvents(conn);
+            this.logger.info({ connection: this.name }, '[AMQP] Connected');
+            try {
+                this.emit('connected', conn);
+            } catch (err) {
+                const error = err instanceof Error ? err : new Error(String(err));
+                this.logger.error({ err: error, connection: this.name }, '[AMQP] Connected listener failed');
+                this.emitSafe('connection_error', error);
+            }
+            return;
         }
     }
 
-    private async openConnection(): Promise<ChannelModel> {
-        const clientProperties = this.buildClientProperties();
-
-        if ('url' in this.config.connection) {
-            return connect(this.config.connection.url, {
-                ...(this.config.connection.socketOptions as object | undefined),
-                clientProperties,
-            });
-        }
-
-        return connect(this.config.connection.options, {
-            ...(this.config.connection.socketOptions as object | undefined),
-            clientProperties,
+    private openConnection(signal: AbortSignal): Promise<ChannelModel> {
+        const connection = this.config.connection;
+        const socketOptions = connection.socketOptions as { signal?: AbortSignal } | undefined;
+        return connect('url' in connection ? connection.url : connection.options, {
+            ...socketOptions,
+            clientProperties: this.buildClientProperties(),
+            signal: socketOptions?.signal ? AbortSignal.any([socketOptions.signal, signal]) : signal,
         });
     }
 

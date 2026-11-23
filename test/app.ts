@@ -51,8 +51,8 @@ process.once('SIGTERM', async () => {
 
 try {
     (async () => {
-        process.env.RABBITMQ_USERNAME = 'guest';
-        process.env.RABBITMQ_PASSWORD = 'guest';
+        process.env.RABBITMQ_USERNAME = 'milo';
+        process.env.RABBITMQ_PASSWORD = 'milo-local-password';
         process.env.RABBITMQ_HOST = '192.168.111.63';
         process.env.RABBITMQ_PROTOCOL = 'amqp';
         process.env.RABBITMQ_PORT = '5672';

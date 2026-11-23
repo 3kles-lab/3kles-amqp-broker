@@ -1,3 +1,4 @@
+import { Options } from 'amqplib';
 import { EventEmitter } from 'events';
 import { MessageBroker } from '../src/message-broker';
 import { AmqpPublishError, AmqpPublishUnknownError, AmqpUnroutableError } from '../src/errors';
@@ -10,6 +11,11 @@ class FakeChannel extends EventEmitter {
         return false; // Backpressure is not a negative confirmation.
     });
     sendToQueue = jest.fn(() => false);
+    assertQueue = jest.fn(async (queue: string, _options: Options.AssertQueue) => ({
+        queue: queue || 'amq.gen-test',
+        messageCount: 0,
+        consumerCount: 0,
+    }));
     close = jest.fn(async () => { this.emit('close'); });
 }
 
@@ -67,6 +73,27 @@ test('Publisher queue calls use the same confirmation path', async () => {
     expect(channel.publish).toHaveBeenCalledWith('', 'queue', expect.any(Buffer), expect.objectContaining({ mandatory: true }), expect.any(Function));
     channel.publications[0].callback();
     await expect(result).resolves.toBe(true);
+});
+
+test('sendToQueueInput publishes to the generated name returned by assertQueue', async () => {
+    const { broker, channel } = await setup();
+    const assertQueue = { exclusive: true, autoDelete: true, durable: false };
+    const published = new Promise<(error?: Error) => void>((resolve) => {
+        channel.publish.mockImplementationOnce((_exchange, _queue, _content, _options, callback) => {
+            resolve(callback);
+            return false;
+        });
+    });
+
+    const result = broker.sendToQueueInput({ queue: '', payload: 'generated queue', assertQueue });
+    const confirm = await published;
+    expect(channel.assertQueue).toHaveBeenCalledWith('', assertQueue);
+    expect(channel.publish).toHaveBeenCalledWith('', 'amq.gen-test', Buffer.from('generated queue'),
+        expect.objectContaining({ mandatory: true }), expect.any(Function));
+
+    confirm();
+    await expect(result).resolves.toBe(true);
+    expect(jest.getTimerCount()).toBe(0);
 });
 
 test('returns reject immediately with routing details, independently of reused messageIds', async () => {
